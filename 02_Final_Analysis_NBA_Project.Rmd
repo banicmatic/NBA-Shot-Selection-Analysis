@@ -1,0 +1,1109 @@
+---
+title: "Good Shot, Bad Shot?"
+subtitle: "Evaluating Shot Selection and Shot-Making Performance in the NBA"
+author: "Borna Anic-Matic"
+date: "`r Sys.Date()`"
+output: pdf_document
+header-includes:
+  - \usepackage{float}
+---
+```{r setup, include=FALSE}
+
+
+library(hoopR)
+library(tidyverse)
+library(janitor)
+library(httr2)
+library(jsonlite)
+library(ggrepel)
+library(scales)
+library(sportyR)
+
+shots_2024 <- hoopR::load_nba_stats_shots(
+  seasons = 2023
+)
+
+shots_2025 <- hoopR::load_nba_stats_shots(
+  seasons = 2024
+)
+
+shots_2026 <- hoopR::load_nba_stats_shots(
+  seasons = 2025
+)
+```
+
+
+
+```{r training-data, include=FALSE}
+shots_2024 <- shots_2024 |>
+  mutate(
+    made = if_else(shot_result == "Made", 1, 0),
+    minutes = as.numeric(str_extract(clock, "\\d+(?=M)")),
+    seconds = as.numeric(str_extract(clock, "\\d+\\.\\d+(?=S)")),
+    time_remaining = minutes * 60 + seconds,
+    under_3s = if_else(time_remaining <= 3, 1, 0),
+    shot_angle = atan2(abs(x_legacy), y_legacy),
+    at_origin = if_else(
+      x_legacy == 0 & y_legacy == 0, 1, 0
+    )
+  ) |>
+  filter(
+    !(shot_distance >= 36 &
+      time_remaining <= 3 &
+      period <= 3)
+  )
+```
+
+```{r validation-data, include=FALSE}
+shots_2025 <- shots_2025 |>
+  mutate(
+    made = if_else(shot_result == "Made", 1, 0),
+    minutes = as.numeric(str_extract(clock, "\\d+(?=M)")),
+    seconds = as.numeric(str_extract(clock, "\\d+\\.\\d+(?=S)")),
+    time_remaining = minutes * 60 + seconds,
+    under_3s = if_else(time_remaining <= 3, 1, 0),
+    shot_angle = atan2(abs(x_legacy), y_legacy),
+    at_origin = if_else(
+      x_legacy == 0 & y_legacy == 0, 1, 0
+    )
+  ) |>
+  filter(
+    !(shot_distance >= 36 &
+      time_remaining <= 3 &
+      period <= 3)
+  )
+```
+
+```{r candidate-models, include=FALSE}
+model_1 <- glm(
+  made ~ shot_distance,
+  data = shots_2024,
+  family = binomial
+)
+
+model_2 <- glm(
+  made ~ shot_distance + sub_type,
+  data = shots_2024,
+  family = binomial
+)
+
+model_3 <- glm(
+  made ~ shot_distance + sub_type + under_3s,
+  data = shots_2024,
+  family = binomial
+)
+
+model_4 <- glm(
+  made ~ shot_distance + I(shot_distance^2) +
+    sub_type + under_3s,
+  data = shots_2024,
+  family = binomial
+)
+
+model_5 <- glm(
+  made ~ splines::ns(shot_distance, df = 4) +
+    sub_type + under_3s,
+  data = shots_2024,
+  family = binomial
+)
+
+shots_2025 <- shots_2025 |>
+  mutate(
+    xfg_model1 = predict(model_1, newdata = shots_2025,
+                         type = "response"),
+    xfg_model2 = predict(model_2, newdata = shots_2025,
+                         type = "response"),
+    xfg_model3 = predict(model_3, newdata = shots_2025,
+                         type = "response"),
+    xfg_model4 = predict(model_4, newdata = shots_2025,
+                         type = "response"),
+    xfg_model5 = predict(model_5, newdata = shots_2025,
+                         type = "response")
+  )
+```
+
+
+```{r model-6, include=FALSE}
+model_6 <- glm(
+  made ~ splines::ns(shot_distance, df = 4) +
+    sub_type +
+    under_3s +
+    shot_angle +
+    at_origin,
+  data = shots_2024,
+  family = binomial
+)
+
+shots_2025 <- shots_2025 |>
+  mutate(
+    xfg_model6 = predict(
+      object = model_6,
+      newdata = shots_2025,
+      type = "response"
+    )
+  )
+```
+
+
+```{r testing-data, include=FALSE}
+shots_2026 <- shots_2026 |>
+  mutate(
+    made = if_else(shot_result == "Made", 1, 0),
+    minutes = as.numeric(str_extract(clock, "\\d+(?=M)")),
+    seconds = as.numeric(str_extract(clock, "\\d+\\.\\d+(?=S)")),
+    time_remaining = minutes * 60 + seconds,
+    under_3s = if_else(time_remaining <= 3, 1, 0),
+    shot_angle = atan2(abs(x_legacy), y_legacy),
+    at_origin = if_else(
+      x_legacy == 0 & y_legacy == 0, 1, 0
+    )
+  ) |>
+  filter(
+    !(shot_distance >= 36 &
+      time_remaining <= 3 &
+      period <= 3)
+  )
+
+shots_2026 <- shots_2026 |>
+  mutate(
+    xfg_model6 = predict(
+      object = model_6,
+      newdata = shots_2026,
+      type = "response"
+    )
+  )
+```
+
+
+```{r player-statistics, include=FALSE}
+shots_2026 <- shots_2026 |>
+  mutate(
+    xPts = xfg_model6 * shot_value,
+    actual_pts = shot_value * made
+  )
+
+shots_2026_player_table <- shots_2026 |>
+  group_by(person_id, player_name) |>
+  summarise(
+    attempts = n(),
+    actual_points = sum(actual_pts),
+    Total_xPts = sum(xPts),
+    SSQ = Total_xPts / attempts,
+    SMP = (actual_points - Total_xPts) / attempts,
+    PAE = round(actual_points - Total_xPts, 2),
+    .groups = "drop"
+  )
+
+shots_2026_qualified <- shots_2026_player_table |>
+  filter(attempts > 299)
+```
+
+
+```{r correlation-analysis, include=FALSE}
+cor_SSQ_SMP <- cor(
+  shots_2026_qualified$SSQ,
+  shots_2026_qualified$SMP
+)
+
+shots_2026_qualified <- shots_2026_qualified |>
+  mutate(
+    actual_PPA = actual_points / attempts
+  )
+
+cor_SSQ_actualPPA <- cor(
+  shots_2026_qualified$SSQ,
+  shots_2026_qualified$actual_PPA
+)
+
+cor_SSQ_SMP^2
+cor_SSQ_actualPPA^2
+
+league_avg_SSQ <- mean(shots_2026$xPts)
+```
+
+
+```{r spatial-data, include=FALSE}
+shots_2026 <- shots_2026 |>
+  mutate(
+    x_bin = floor(x_legacy / 25) * 25,
+    y_bin = floor(y_legacy / 25) * 25
+  )
+
+shots_2026_court_bins <- shots_2026 |>
+  group_by(x_bin, y_bin) |>
+  summarise(
+    attempts = n(),
+    avg_xPts = mean(xPts),
+    avg_actual_pts = mean(actual_pts),
+    spatial_points = avg_actual_pts - avg_xPts,
+    .groups = "drop"
+  ) |>
+  filter(attempts >= 30) |>
+  mutate(
+    court_x = (x_bin + 12.5) / 10,
+    court_y = (y_bin + 12.5) / 10 - 41.75
+  )
+```
+
+
+```{r player-distance-comparison, include=FALSE}
+player_distance_comparison <- shots_2026 |>
+  filter(person_id %in% c(
+    201142, 201942,
+    203497, 1627751,
+    201939, 2544
+  )) |>
+  mutate(
+    distance_bin = cut(
+      shot_distance,
+      breaks = c(-1, 4, 9, 14, 22, 29, Inf),
+      labels = c(
+        "At Rim",
+        "Short Range",
+        "Midrange",
+        "Long Midrange",
+        "Three-Point Range",
+        "Deep"
+      )
+    )
+  ) |>
+  group_by(person_id, player_name, distance_bin) |>
+  summarise(
+    attempts = n(),
+    SSQ = mean(xPts, na.rm = TRUE),
+    actual_PPA = mean(actual_pts, na.rm = TRUE),
+    SMP = actual_PPA - SSQ,
+    PAE = sum(actual_pts - xPts, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  group_by(person_id) |>
+  mutate(
+    shot_share = round(attempts / sum(attempts) * 100, 2)
+  ) |>
+  ungroup()
+```
+
+```{r,echo=FALSE}
+
+KD_vs_DD <- player_distance_comparison |>
+  filter(person_id %in% c(201142, 201942))
+
+RG_vs_JP <- player_distance_comparison |>
+  filter(person_id %in% c(203497, 1627751))
+
+LBJ_vs_SC <- player_distance_comparison |>
+  filter(person_id %in% c(201939, 2544))
+
+```
+
+# Abstract
+
+Traditional basketball statistics, such as field goal percentage and effective field goal percentage, provide useful information about a player's shooting efficiency. However, these statistics do not necessarily distinguish between the quality of shots a player takes and their ability to make those shots. This study examines the relationship between shot selection and shot-making performance in the NBA using shot-level data from the 2023–24, 2024–25, and 2025–26 seasons.
+
+Six logistic regression models were developed using the 2023–24 season and evaluated using data from the 2024–25 season. The selected model was then tested on the 2025–26 season, achieving a Brier score of 0.2247. Using the model's predicted shooting probabilities, three metrics were developed: Shot Selection Quality (SSQ), Shot-Making Performance (SMP), and Points Above Expected (PAE). These metrics were used to examine differences in shot selection and shooting performance across the league and among individual players.
+
+The results showed a modest negative correlation between SSQ and SMP (r = -0.301), although this relationship must be interpreted carefully because of how the metrics are calculated. Individual player comparisons also revealed that players with higher expected shot values did not necessarily outperform expectations. For example, Kevin Durant demonstrated strong shot-making performance despite having a relatively low SSQ, while Rudy Gobert had a high SSQ but negative SMP.
+
+Overall, the findings suggest that shot selection and shot-making should be examined separately when evaluating shooting performance, while also recognizing the influence of player roles and shot difficulty.
+
+# 1. Introduction
+
+## 1.1 Background
+
+In basketball, shooting efficiency is often evaluated using statistics such as field goal percentage (FG%) and effective field goal percentage (eFG%). These statistics provide useful information about how efficiently a player converts their shot attempts, with eFG% also accounting for the additional value of three-point shots. However, these statistics do not necessarily account for the difficulty of the shots being attempted or distinguish between a player's shot selection and their ability to make those shots.
+
+For example, a player who primarily attempts dunks and layups may have a considerably higher field goal percentage than a player who regularly attempts contested midrange jump shots. While the first player may appear to be the more efficient shooter, this does not necessarily mean they possess greater shot-making ability. Instead, the difference may partly reflect the types of opportunities each player receives and the offensive responsibilities they have within their team.
+
+This raises an important question when evaluating NBA players: to what extent is shooting efficiency influenced by the quality of shots being taken, and to what extent does it reflect a player's ability to convert those opportunities?
+
+## 1.2 Previous Research
+
+Previous research has examined how shot selection and expected scoring value can be used to better understand offensive performance in basketball.
+
+Skinner (2012) investigated the problem of shot selection by examining how teams make decisions about when to attempt a shot during a possession. His research highlighted that the value of a shot depends not only on its probability of success but also on the opportunities that may become available later in the possession. This suggests that evaluating shot selection requires considering more than whether an individual attempt is successful.
+
+Miller et al. (2014) examined spatial patterns in professional basketball by developing statistical models of where players attempt shots. Their research demonstrated how shot locations and individual shooting tendencies can be examined using spatial data, providing a foundation for understanding differences in shot selection across players.
+
+Similarly, Cervone et al. (2016) developed an expected possession value framework to estimate the expected outcome of a basketball possession using player-tracking information. Their work demonstrated how statistical modelling can account for the changing circumstances of a possession when evaluating offensive decisions.
+
+Together, these studies demonstrate the value of moving beyond traditional shooting statistics and considering shot location, expected scoring value, and offensive decision-making when evaluating performance. However, there is also value in examining these concepts through a more accessible statistical framework using publicly available shot-level data. 
+
+## 1.3 Purpose of the Study 
+
+The purpose of this study is to examine the relationship between shot selection and shot-making performance in the NBA by developing a model that estimates the probability of a shot being made based on its characteristics.
+
+Using shot-level data from the 2023–24, 2024–25, and 2025–26 NBA seasons, logistic regression models were developed and evaluated to estimate expected shot value. These predictions were then used to construct three metrics: Shot Selection Quality (SSQ), Shot-Making Performance (SMP), and Points Above Expected (PAE).
+
+SSQ measures the average expected points generated by a player's shot attempts, providing an indication of the expected value of their shot selection. SMP compares actual scoring performance with these expectations on a per-attempt basis, while PAE measures the total difference between actual and expected points.
+
+By separating these measures, the study aims to better understand how players with different shooting profiles generate scoring value. Rather than treating shooting efficiency as a single measure of performance, the analysis considers both the expected value of the shots being taken and how effectively players convert those opportunities.
+
+## 1.4 Research Questions
+
+This study addresses three primary research questions:
+
+1. How does Shot Selection Quality vary across NBA players based on the characteristics of their shot attempts?
+
+2. What is the relationship between Shot Selection Quality and Shot-Making Performance?
+
+3. How do differences in shot selection and shot-making help explain scoring performance among players with different offensive roles and shooting profiles?
+
+Through league-wide analysis and comparisons of individual players, this study aims to demonstrate the importance of distinguishing between shot selection and shot-making when evaluating NBA shooting performance.
+
+# 2. Data Collection & Methodology
+
+## 2.1 Data Collection
+
+Data for this study was collected using the hoopR package in R, which provides access to NBA shot-level statistics. Three NBA seasons were examined: 2023–24, 2024–25, and 2025–26. Each dataset contained information about individual field goal attempts, including shot distance, shot type, shot location, game period, time remaining, and whether the attempt was successful.
+
+The three seasons were separated to allow for model development, validation, and testing. The 2023–24 season was used to train the logistic regression models, while the 2024–25 season was used to evaluate their predictive performance and select the final model. The 2025–26 season was then used to assess the selected model and conduct the league-wide and individual player analyses.
+
+Following data preparation and the removal of qualifying end-of-period heaves, the datasets contained 233,195 attempts from 2023–24, 234,410 attempts from 2024–25, and 234,811 attempts from 2025–26.
+
+Using separate seasons for training and validation helped assess whether the models could predict shot outcomes beyond the data on which they were originally developed.
+
+## 2.2 Data Cleaning and Preparation
+
+Before developing the models, several variables were cleaned or transformed to make the datasets suitable for statistical analysis.
+
+First, shot outcomes were converted into a binary variable, where successful field goal attempts were assigned a value of 1 and unsuccessful attempts were assigned a value of 0. This allowed logistic regression to be used to estimate the probability of an individual shot being made.
+
+The game clock was also converted into a numerical measure of seconds remaining in the period. From this, an indicator variable was created to identify attempts occurring with three seconds or fewer remaining. This was included because shots attempted near the end of a period may differ from those taken during regular offensive possessions.
+
+Additionally, the shot location coordinates were used to calculate the angle of each attempt relative to the basket. An indicator was also created for observations recorded at the coordinate origin, allowing the model to account for this specific spatial characteristic.
+
+An additional adjustment was made to address differences in the recording of long-distance heaves. Under the NBA's updated statistical treatment of certain end-of-period attempts, some missed heaves are no longer charged as individual field goal attempts. To improve consistency across the three seasons, attempts from 36 feet or farther, taken with three seconds or fewer remaining in periods one through three, were excluded.
+
+This adjustment was an approximation of the NBA's heave criteria rather than an exact reconstruction of the official rule. The same exclusion was applied to all three seasons to maintain consistency.
+
+## 2.3 Logistic Regression Model Development
+
+Logistic regression was selected because the outcome being predicted was binary: whether an individual field goal attempt was made or missed. The models estimated the probability of a successful shot based on the characteristics of each attempt.
+
+Six candidate logistic regression models were developed using the 2023–24 dataset. Different combinations of predictors were examined to determine which model provided the strongest predictive performance.
+
+The final model, Model 6, included shot distance, shot subtype, an indicator for attempts with three seconds or fewer remaining, shot angle, and an indicator for shots recorded at the coordinate origin.
+
+Rather than assuming a constant linear relationship between shot distance and the log-odds of making a shot, natural cubic splines with four degrees of freedom were used. This allowed the model to account for nonlinear changes in shooting probability across different distances.
+
+The models were compared using the Akaike Information Criterion (AIC) and Brier scores. AIC was used to evaluate model fit while accounting for model complexity, whereas the Brier score measured the accuracy of predicted probabilities by calculating the average squared difference between predicted outcomes and actual results. Lower values indicate better predictive performance.
+
+
+```{r model-comparison-table, echo=FALSE}
+model_comparison <- data.frame(
+  Model = paste("Model", 1:6),
+  AIC = c(
+    AIC(model_1),
+    AIC(model_2),
+    AIC(model_3),
+    AIC(model_4),
+    AIC(model_5),
+    AIC(model_6)
+  ),
+  Validation_Brier = c(
+    mean((shots_2025$xfg_model1 - shots_2025$made)^2),
+    mean((shots_2025$xfg_model2 - shots_2025$made)^2),
+    mean((shots_2025$xfg_model3 - shots_2025$made)^2),
+    mean((shots_2025$xfg_model4 - shots_2025$made)^2),
+    mean((shots_2025$xfg_model5 - shots_2025$made)^2),
+    mean((shots_2025$xfg_model6 - shots_2025$made)^2)
+  )
+)
+
+knitr::kable(
+  model_comparison,
+  digits = c(0, 1, 5),
+  col.names = c("Model", "Training AIC", "Validation Brier"),
+  caption = "Comparison of Six Logistic Regression Models"
+)
+```
+
+As shown in the model comparison table, Model 6 achieved the lowest validation Brier score among the six candidate models and was therefore selected for the final analysis. Its validation Brier score was 0.2253, followed by a test Brier score of 0.2247 on the 2025–26 dataset.
+
+Calibration was also examined to determine how closely predicted shooting probabilities aligned with observed shooting frequencies. The model demonstrated relatively strong calibration across the more frequently observed probability ranges, although predictions at the extremes were based on smaller samples.
+
+Following model selection, the predicted probability of making each shot was multiplied by its point value, either two or three points, to calculate the expected points generated by each attempt.
+
+## 2.4 Development of Performance Metrics
+
+Using the predicted expected points from Model 6, three metrics were developed to evaluate shot selection and shot-making performance: Shot Selection Quality (SSQ), Shot-Making Performance (SMP), and Points Above Expected (PAE).
+
+Shot Selection Quality (SSQ) measures the average expected points per field goal attempt. It was calculated by dividing a player's total expected points by their total number of attempts.
+
+$$
+SSQ = \frac{\sum \text{Expected Points}}{\text{Shot Attempts}}
+$$
+
+A higher SSQ indicates that a player's attempted shots have a higher predicted scoring value based on the characteristics included in the model. However, this does not necessarily indicate greater offensive ability, as the types of opportunities available to players may differ depending on their roles.
+
+Shot-Making Performance (SMP) measures how effectively a player converts their attempts relative to model expectations. It was calculated by subtracting expected points per attempt from actual points per attempt.
+
+$$
+SMP = \text{Actual PPA} - SSQ
+$$
+A positive SMP indicates that a player scored more points per attempt than predicted, while a negative SMP indicates that they scored fewer than expected.
+
+Points Above Expected (PAE) measures the cumulative difference between actual and expected points across a player's field goal attempts.
+
+
+$$
+PAE = \sum (\text{Actual Points} - \text{Expected Points})
+$$
+Unlike SMP, which measures performance on a per-attempt basis, PAE accounts for the total number of shots taken. As a result, PAE can help identify players who generate substantial additional scoring value across a larger volume of attempts.
+
+Together, these three metrics allow shot selection and shot-making to be evaluated separately. SSQ describes the expected value of the attempted shots, SMP measures performance relative to those expectations, and PAE captures the cumulative scoring difference.
+
+For the league-wide player comparisons, players with at least 300 field goal attempts were included to reduce the influence of particularly small shooting samples. Individual player analyses were then conducted to examine how shooting distance and offensive roles contributed to differences in these metrics. 
+
+# 3. League-Wide Results
+
+## 3.1 Model Performance
+
+```{r model-performance,echo=FALSE}
+validation_brier <- mean(
+  (shots_2025$xfg_model6 - shots_2025$made)^2
+)
+
+test_brier <- mean(
+  (shots_2026$xfg_model6 - shots_2026$made)^2
+)
+
+model_performance <- data.frame(
+  Dataset = c("Validation (2024-25)", "Testing (2025-26)"),
+  Brier_Score = c(validation_brier, test_brier)
+)
+
+knitr::kable(
+  model_performance,
+  digits = 4,
+  caption = "Model 6 Predictive Performance"
+)
+```
+
+
+Following the development and comparison of six logistic regression models, Model 6 was selected based on its predictive performance on the 2024–25 validation dataset. The selected model achieved a validation Brier score of 0.2253 and a test Brier score of 0.2247 on the 2025–26 dataset.
+
+
+```{r calibration-plot, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=3.8, out.width="75%", fig.align='center', fig.pos='H', fig.cap="Model 6 calibration on the 2025-26 test dataset."}
+shots_2026_prob_bins <- shots_2026 |>
+  mutate(
+    probability_bin = cut(
+      xfg_model6,
+      breaks = seq(0, 1, by = 0.1),
+      include.lowest = TRUE
+    )
+  ) |>
+  group_by(probability_bin) |>
+  summarise(
+    attempts = n(),
+    fg_made = sum(made),
+    fg_percentage = fg_made / attempts,
+    xfg_m6 = mean(xfg_model6),
+    .groups = "drop"
+  )
+
+ggplot(
+  shots_2026_prob_bins,
+  aes(x = xfg_m6, y = fg_percentage)
+) +
+  geom_point() +
+  geom_line() +
+  geom_abline(
+    slope = 1,
+    intercept = 0,
+    linetype = "dashed"
+  ) +
+  labs(
+    title = "Model 6 Calibration",
+    x = "Predicted Make Probability",
+    y = "Actual Make Percentage"
+  ) +
+  theme_minimal()
+```
+
+## 3.2 Shot Selection and Shot-Making Performance
+
+To examine the relationship between shot selection and shot-making, Shot Selection Quality (SSQ) and Shot-Making Performance (SMP) were compared among NBA players with at least 300 field goal attempts during the 2025–26 season.
+
+The results showed a modest negative correlation between SSQ and SMP (r = -0.301, R² = 0.090). This suggests that players who attempted shots with higher expected values did not necessarily outperform the model's predictions by a greater amount. However, this relationship must be interpreted carefully, as SMP is calculated using SSQ, meaning the two measures are mathematically related.
+
+```{r ssq-smp-quadrant, echo=FALSE, warning=FALSE, message=FALSE, fig.width=9, fig.height=5, out.width="90%", fig.align='center', fig.pos='H', fig.cap="Shot Selection Quality and Shot-Making Performance among NBA players with at least 300 field goal attempts."}
+featured_players <- shots_2026_qualified |>
+  filter(
+    person_id %in% c(
+      2544, 201142, 201939,
+      201942, 1627751, 203497
+    )
+  ) |>
+  mutate(
+    display_name = case_when(
+      person_id == 2544 ~ "LeBron James",
+      person_id == 201142 ~ "Kevin Durant",
+      person_id == 201939 ~ "Stephen Curry",
+      person_id == 201942 ~ "DeMar DeRozan",
+      person_id == 1627751 ~ "Jakob Poeltl",
+      person_id == 203497 ~ "Rudy Gobert"
+    )
+  )
+
+bg <- "#101827"
+panel <- "#172235"
+white <- "#F8FAFC"
+muted <- "#A8B8CF"
+highlight_color <- "#38BDF8"
+
+nba_quadrant_plot <- ggplot(
+  shots_2026_qualified,
+  aes(x = SSQ, y = SMP)
+) +
+  geom_point(
+    color = "#94A3B8",
+    alpha = 0.25,
+    size = 1.8
+  ) +
+  geom_hline(
+    yintercept = 0,
+    color = "#CBD5E1",
+    linetype = "dashed",
+    linewidth = 0.5,
+    alpha = 0.75
+  ) +
+  geom_vline(
+    xintercept = league_avg_SSQ,
+    color = "#CBD5E1",
+    linetype = "dashed",
+    linewidth = 0.5,
+    alpha = 0.75
+  ) +
+  geom_point(
+    data = featured_players,
+    color = highlight_color,
+    size = 4
+  ) +
+  ggrepel::geom_text_repel(
+    data = featured_players,
+    aes(label = display_name),
+    color = white,
+    size = 3.2,
+    fontface = "bold",
+    box.padding = 0.7,
+    point.padding = 0.5,
+    force = 3,
+    force_pull = 0.6,
+    max.overlaps = Inf,
+    seed = 42,
+    min.segment.length = 0,
+    segment.color = "#94A3B8",
+    segment.alpha = 0.8
+  ) +
+  labs(
+    title = "GOOD SHOT, BAD SHOT?",
+    subtitle = "NBA 2025–26 | Shot Selection vs. Shot-Making Performance",
+    x = "SHOT SELECTION QUALITY (Expected Points per Attempt)",
+    y = "SHOT-MAKING PERFORMANCE (SMP)",
+    caption = "300+ FGA | Heave-adjusted sample | Dashed lines show league SSQ and zero SMP"
+  ) +
+  scale_x_continuous(
+    expand = expansion(mult = c(0.08, 0.08))
+  ) +
+  scale_y_continuous(
+    expand = expansion(mult = c(0.12, 0.12))
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.background = element_rect(fill = bg, color = NA),
+    panel.background = element_rect(fill = panel, color = NA),
+    panel.grid.major = element_line(
+      color = "#344155",
+      linewidth = 0.3
+    ),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(
+      color = white,
+      face = "bold",
+      size = 15,
+      margin = margin(b = 4)
+    ),
+    plot.subtitle = element_text(
+      color = muted,
+      size = 8.5,
+      margin = margin(b = 8)
+    ),
+    plot.caption = element_text(
+      color = muted,
+      size = 8,
+      hjust = 1,
+      margin = margin(t = 8)
+    ),
+    axis.title.x = element_text(
+      color = white,
+      face = "bold",
+      size = 9,
+      margin = margin(t = 8)
+    ),
+    axis.title.y = element_text(
+      color = white,
+      face = "bold",
+      size = 9,
+      margin = margin(r = 8)
+    ),
+    axis.text = element_text(
+      color = white,
+      size = 8.5
+    ),
+    legend.position = "none",
+    plot.margin = margin(12, 18, 12, 18)
+  )
+
+nba_quadrant_plot
+```
+
+As shown in Figure 2, players demonstrated considerable variation in both shot selection and shot-making. For example, Rudy Gobert recorded a relatively high SSQ of 1.424 but a negative SMP of -0.106. In comparison, Kevin Durant recorded a lower SSQ of 0.993 but a positive SMP of 0.183. These differences highlight why evaluating shot selection and shot-making separately can provide a more detailed understanding of shooting performance.
+
+A second comparison examined the relationship between SSQ and actual points per attempt. This produced a moderate positive correlation (r = 0.518, R² = 0.268), suggesting that players with higher expected shot values generally produced more actual points per attempt.
+
+Overall, the findings demonstrate that expected shot value and performance relative to expectations describe different aspects of NBA shooting efficiency.
+
+## 3.3 Spatial Analysis
+
+To further examine shot selection and shot-making across the NBA, two spatial heatmaps were developed using shot location data from the 2025–26 season. The court was divided into 2.5-foot spatial bins, with only locations containing at least 30 attempts included in the analysis.
+
+The first heatmap examined average expected points per attempt across different areas of the court. As shown in Figure 3, shots taken near the basket generally had the highest expected values, while many midrange locations produced lower expected points per attempt. Higher-value regions were also visible along portions of the three-point arc. These findings demonstrate how the expected scoring value of an attempt varies depending on its location and other characteristics included in Model 6.
+
+
+```{r expected-points-heatmap, echo=FALSE, warning=FALSE, message=FALSE, fig.width=8, fig.height=5.5, out.width="75%", fig.align='center', fig.pos='H', fig.cap="Expected points per field goal attempt by court location, NBA 2025-26."}
+shots_2026_court_filtered <- shots_2026_court_bins |>
+  filter(
+    attempts >= 30,
+    !is.na(avg_xPts)
+  )
+
+bg <- "#101827"
+hardwood <- "#D5AD72"
+hardwood_light <- "#E5C390"
+court_lines <- "#FFFFFF"
+white <- "#FFFFFF"
+muted <- "#CBD5E1"
+
+nba_heatmap <- geom_basketball(
+  league = "NBA",
+  display_range = "offense",
+  rotation = 270,
+  color_updates = list(
+    plot_background = bg,
+    offensive_half_court = hardwood,
+    defensive_half_court = hardwood,
+    court_apron = bg,
+    two_point_range = c(hardwood, "#FFFFFF00"),
+    painted_area = c(hardwood_light, "#FFFFFF00"),
+    center_circle_fill = hardwood,
+    free_throw_circle_fill = hardwood,
+    sideline = court_lines,
+    endline = court_lines,
+    division_line = court_lines,
+    center_circle_outline = court_lines,
+    three_point_line = court_lines,
+    lane_boundary = court_lines,
+    free_throw_circle_outline = court_lines,
+    free_throw_circle_dash = court_lines,
+    lane_space_mark = court_lines,
+    restricted_arc = court_lines,
+    backboard = court_lines,
+    basket_ring = "#F97316"
+  )
+) +
+  geom_tile(
+    data = shots_2026_court_filtered,
+    aes(
+      x = court_x,
+      y = court_y,
+      fill = avg_xPts
+    ),
+    width = 2.5,
+    height = 2.5,
+    alpha = 0.6,
+    inherit.aes = FALSE
+  ) +
+  scale_fill_gradientn(
+    colours = c(
+      "#BBDCF9",
+      "#76B5E8",
+      "#3682BC",
+      "#155184",
+      "#071D40"
+    ),
+    values = scales::rescale(
+      c(0.65, 0.85, 1.05, 1.25, 1.50)
+    ),
+    limits = c(0.65, 1.50),
+    oob = scales::squish,
+    breaks = c(0.75, 1.00, 1.25, 1.50),
+    labels = scales::label_number(accuracy = 0.01),
+    name = "EXPECTED POINTS\nPER ATTEMPT",
+    guide = guide_colorbar(
+      barheight = grid::unit(4.2, "cm"),
+      barwidth = grid::unit(0.7, "cm"),
+      frame.colour = NA,
+      ticks.colour = white,
+      title.position = "top",
+      title.hjust = 0
+    )
+  ) +
+  coord_fixed(
+    xlim = c(-25, 25),
+    ylim = c(-47, -1),
+    ratio = 1,
+    expand = FALSE
+  ) +
+  labs(
+    title = "WHERE ARE THE NBA'S MOST VALUABLE SHOTS?",
+    subtitle = "GOOD SHOT, BAD SHOT?  |  NBA 2025–26",
+    caption = paste(
+      "Model 6 expected points  •  2.5-ft bins  •",
+      "30+ attempts per bin  •  Heave-adjusted"
+    )
+  ) +
+  theme_void(base_size = 11) +
+  theme(
+    plot.background = element_rect(fill = bg, colour = NA),
+    panel.background = element_rect(fill = hardwood, colour = NA),
+    plot.title = element_text(
+      colour = white, face = "bold", size = 14,
+      margin = margin(b = 3)
+    ),
+    plot.subtitle = element_text(
+      colour = "#38BDF8", face = "bold", size = 9,
+      margin = margin(b = 5)
+    ),
+    plot.caption = element_text(
+      colour = muted, size = 7.5, hjust = 0,
+      margin = margin(t = 5)
+    ),
+    legend.position = "right",
+    legend.title = element_text(
+      colour = white, size = 9, face = "bold",
+      margin = margin(b = 10)
+    ),
+    legend.text = element_text(colour = muted, size = 9),
+    legend.background = element_rect(fill = bg, colour = NA),
+    legend.key = element_rect(fill = bg, colour = NA),
+    plot.margin = margin(5, 5, 5, 5)
+  )
+
+nba_heatmap
+```
+
+
+The second heatmap compared actual points per attempt with expected points per attempt to examine spatial differences in shot-making performance. As shown in Figure 4, positive and negative differences were distributed across the court rather than forming a clear, consistent pattern. Some locations produced higher scoring outcomes than predicted, while others fell below expectations.
+
+
+```{r spatial-smp-heatmap, echo=FALSE, warning=FALSE, message=FALSE, fig.width=8, fig.height=5.5, out.width="75%", fig.align='center', fig.pos='H', fig.cap="Spatial shot-making performance relative to Model 6 expectations, NBA 2025-26."}
+shots_2026_spatial_filtered <- shots_2026_court_bins |>
+  filter(
+    attempts >= 30,
+    !is.na(spatial_points)
+  )
+
+bg <- "#101827"
+hardwood <- "#D5AD72"
+hardwood_light <- "#E5C390"
+court_lines <- "#172235"
+white <- "#FFFFFF"
+muted <- "#CBD5E1"
+
+nba_spatial_heatmap <- geom_basketball(
+  league = "NBA",
+  display_range = "offense",
+  rotation = 270,
+  color_updates = list(
+    plot_background = bg,
+    offensive_half_court = hardwood,
+    defensive_half_court = hardwood,
+    court_apron = bg,
+    two_point_range = c(hardwood, "#FFFFFF00"),
+    painted_area = c(hardwood_light, "#FFFFFF00"),
+    center_circle_fill = hardwood,
+    free_throw_circle_fill = hardwood,
+    sideline = court_lines,
+    endline = court_lines,
+    division_line = court_lines,
+    center_circle_outline = court_lines,
+    three_point_line = court_lines,
+    lane_boundary = court_lines,
+    free_throw_circle_outline = court_lines,
+    free_throw_circle_dash = court_lines,
+    lane_space_mark = court_lines,
+    restricted_arc = court_lines,
+    backboard = court_lines,
+    basket_ring = "#F97316"
+  )
+) +
+  geom_tile(
+    data = shots_2026_spatial_filtered,
+    aes(
+      x = court_x,
+      y = court_y,
+      fill = spatial_points
+    ),
+    width = 2.5,
+    height = 2.5,
+    alpha = 0.78,
+    inherit.aes = FALSE
+  ) +
+  scale_fill_gradient2(
+    low = "#2563A6",
+    mid = "#F2E5CE",
+    high = "#C24135",
+    midpoint = 0,
+    limits = c(-0.30, 0.30),
+    oob = scales::squish,
+    breaks = c(-0.30, -0.15, 0, 0.15, 0.30),
+    labels = function(x) sprintf("%+.2f", x),
+    name = "POINTS ABOVE\nEXPECTED / ATTEMPT",
+    guide = guide_colorbar(
+      barheight = grid::unit(4.2, "cm"),
+      barwidth = grid::unit(0.7, "cm"),
+      frame.colour = NA,
+      ticks.colour = white,
+      title.position = "top",
+      title.hjust = 0
+    )
+  ) +
+  coord_fixed(
+    xlim = c(-25, 25),
+    ylim = c(-47, -1),
+    ratio = 1,
+    expand = FALSE
+  ) +
+  labs(
+    title = "WHERE ARE NBA PLAYERS BEATING EXPECTATIONS?",
+    subtitle = "GOOD SHOT, BAD SHOT?  |  NBA 2025–26",
+    caption = paste(
+      "Model 6 shot-making residuals  •",
+      "2.5-ft bins  •",
+      "30+ attempts per bin  •",
+      "Heave-adjusted"
+    )
+  ) +
+  theme_void(base_size = 11) +
+  theme(
+    plot.background = element_rect(fill = bg, colour = NA),
+    panel.background = element_rect(fill = hardwood, colour = NA),
+    plot.title = element_text(
+      colour = white, face = "bold", size = 14,
+      margin = margin(b = 3)
+    ),
+    plot.subtitle = element_text(
+      colour = "#38BDF8", face = "bold", size = 9,
+      margin = margin(b = 5)
+    ),
+    plot.caption = element_text(
+      colour = muted, size = 7.5, hjust = 0,
+      margin = margin(t = 5)
+    ),
+    legend.position = "right",
+    legend.title = element_text(
+      colour = white, size = 9, face = "bold",
+      margin = margin(b = 10)
+    ),
+    legend.text = element_text(colour = muted, size = 9),
+    legend.background = element_rect(fill = bg, colour = NA),
+    legend.key = element_rect(fill = bg, colour = NA),
+    plot.margin = margin(5, 5, 5, 5)
+  )
+
+nba_spatial_heatmap
+```
+
+
+However, these differences should be interpreted carefully, as locations with fewer attempts may produce more variable results. Overall, the spatial analysis provides additional context for understanding how shot quality and shot-making performance vary across court locations.
+
+# 4. Individual Player Comparisons
+
+## 4.1 Player Performance Overview
+
+To further examine differences in shot selection and shot-making, six NBA players were selected for individual comparison: Kevin Durant, DeMar DeRozan, Rudy Gobert, Jakob Poeltl, Stephen Curry, and LeBron James. These players were selected to represent contrasting offensive profiles and provide examples of how SSQ, SMP, and PAE can vary across different styles of play.
+
+
+```{r six-player-summary, include=FALSE}
+player_comparison_2026 <- shots_2026 |>
+  filter(
+    person_id %in% c(
+      201142,    # Durant
+      201939,    # Curry
+      2544,      # LeBron
+      201942,    # DeRozan
+      203497,    # Gobert
+      1627751    # Poeltl
+    )
+  ) |>
+  group_by(person_id, player_name) |>
+  summarise(
+    attempts = n(),
+    SSQ = mean(xPts, na.rm = TRUE),
+    actual_PPA = mean(actual_pts, na.rm = TRUE),
+    SMP = actual_PPA - SSQ,
+    PAE = sum(actual_pts - xPts, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(desc(PAE))
+```
+
+```{r six-player-table, echo=FALSE}
+knitr::kable(
+  player_comparison_2026 |>
+    select(player_name, attempts, SSQ, SMP, PAE),
+  digits = c(0, 0, 3, 3, 2),
+  col.names = c(
+    "Player", "Attempts", "SSQ", "SMP", "PAE"
+  ),
+  caption = "2025-26 Performance of Six Selected NBA Players"
+)
+```
+
+As shown in Table 3, Kevin Durant recorded the highest Points Above Expected (PAE) among the six selected players, generating approximately 254.50 points above the model's predictions. Durant also recorded a positive SMP of 0.183, indicating that his actual scoring efficiency exceeded his expected efficiency by approximately 0.183 points per attempt.
+
+In contrast, Rudy Gobert recorded the highest SSQ of the selected players at 1.424, but his SMP was negative at -0.106. This illustrates how a player can consistently attempt high-value shots while converting them at a rate below the model's expectations.
+
+These differences demonstrate the value of examining shot selection and shot-making independently.
+
+## 4.2 Kevin Durant vs. DeMar DeRozan: Midrange Shooting
+
+Kevin Durant and DeMar DeRozan provide an interesting comparison because both players frequently utilize midrange shooting. However, their shot distribution and performance relative to expectations differ.
+
+
+```{r durant-derozan-table, echo=FALSE}
+knitr::kable(
+  KD_vs_DD |>
+    filter(distance_bin %in% c(
+      "Midrange",
+      "Long Midrange",
+      "Three-Point Range"
+    )) |>
+    select(
+      player_name, distance_bin,
+      shot_share, SMP, PAE
+    ),
+  digits = 2,
+  col.names = c(
+    "Player", "Distance",
+    "Shot Share (%)", "SMP", "PAE"
+  ),
+  caption = "Durant and DeRozan: Distance-Based Comparison"
+)
+```
+
+
+Across the 10–22-foot distance groups, approximately 47.76% of Durant's attempts originated from these areas, compared with 59.20% of DeRozan's attempts. This indicates that DeRozan relied more heavily on midrange attempts.
+
+Despite this difference, Durant demonstrated stronger performance relative to expectations. In the 10–14-foot range, Durant recorded an SMP of approximately 0.273, generating 99.2 points above expected. DeRozan recorded an SMP of approximately 0.095 and generated 23 points above expected from the same range.
+
+Durant also generated approximately 64.6 points above expected from 23–29 feet, compared with approximately -7.8 for DeRozan. Overall, the comparison suggests that Durant's stronger performance relative to expectations across multiple shooting distances contributed to his substantially higher total PAE.
+
+## 4.3 Rudy Gobert vs. Jakob Poeltl: Interior Scoring
+
+Rudy Gobert and Jakob Poeltl were compared to examine two players whose offensive shot profiles were concentrated near the basket.
+
+
+```{r gobert-poeltl-table, echo=FALSE}
+knitr::kable(
+  RG_vs_JP |>
+    filter(distance_bin == "At Rim") |>
+    select(
+      player_name, attempts,
+      shot_share, SSQ, SMP, PAE
+    ),
+  digits = 2,
+  col.names = c(
+    "Player", "Attempts",
+    "Shot Share (%)", "SSQ", "SMP", "PAE"
+  ),
+  caption = "Gobert and Poeltl: At-Rim Performance"
+)
+```
+
+
+Approximately 88.57% of Gobert's attempts occurred within four feet of the basket, compared with 68.62% of Poeltl's attempts. Gobert also recorded a higher at-rim SSQ of approximately 1.488, compared with 1.384 for Poeltl.
+
+However, Poeltl outperformed his expected scoring efficiency near the basket, recording an at-rim SMP of 0.197 and generating approximately 46.13 points above expected. Gobert recorded an at-rim SMP of -0.081, corresponding to approximately 40.06 points below expected.
+
+Although Gobert attempted a greater proportion of shots from high-value locations, Poeltl converted his opportunities more effectively relative to the model's expectations. This comparison demonstrates why shot location alone does not fully describe a player's offensive efficiency.
+
+## 4.4 Stephen Curry vs. LeBron James: Contrasting Shot Profiles
+
+Stephen Curry and LeBron James were selected to examine two considerably different approaches to offensive shot selection.
+
+
+```{r curry-lebron-table, echo=FALSE}
+knitr::kable(
+  LBJ_vs_SC |>
+    filter(distance_bin %in% c(
+      "At Rim",
+      "Three-Point Range",
+      "Deep"
+    )) |>
+    select(
+      player_name, distance_bin,
+      shot_share, SMP, PAE
+    ),
+  digits = 2,
+  col.names = c(
+    "Player", "Distance",
+    "Shot Share (%)", "SMP", "PAE"
+  ),
+  caption = "Curry and LeBron: Distance-Based Comparison"
+)
+```
+
+
+Curry concentrated a substantial proportion of his attempts beyond 22 feet, with approximately 53.22% coming from 23–29 feet and another 7.40% from 30 feet or farther. In comparison, LeBron attempted approximately 25.34% of his shots from 23–29 feet, while 38.60% originated within four feet of the basket.
+
+Curry generated approximately 70.36 points above expected from the 23–29-foot range, contributing to his overall positive SMP of 0.138. LeBron, meanwhile, generated approximately 55.12 points above expected near the basket. However, negative performance relative to expectations from other distances largely offset this contribution, resulting in an overall PAE of approximately 2.57.
+
+These findings illustrate how different shot distributions can influence overall scoring efficiency and how strong performance in one area of the court does not necessarily translate into equally strong performance across all shooting distances.
+
+# 5. Discussion and Limitations
+
+## 5.1 Discussion of Findings
+
+The results of this study suggest that shot selection and shot-making should be considered separately when evaluating NBA shooting performance. While higher Shot Selection Quality (SSQ) was moderately associated with higher actual points per attempt, players demonstrated considerable variation in their ability to outperform expected scoring values.
+
+The individual player comparisons further highlighted these differences. For example, Rudy Gobert consistently attempted shots with high expected values but recorded negative Shot-Making Performance (SMP), while Kevin Durant generated substantial points above expected despite attempting shots with lower average expected values. These findings illustrate how shooting efficiency can be influenced by both the types of shots attempted and a player's ability to convert those opportunities.
+
+The spatial analysis supported this distinction by demonstrating how expected scoring values vary across the court, while differences between actual and expected performance were less consistently distributed. Together, these findings suggest that evaluating shot selection, shot-making, and total points above expected provides a more detailed assessment than relying on overall field goal percentage alone.
+
+## 5.2 Limitations
+
+Despite these findings, several limitations should be considered when interpreting the results.
+
+First, the logistic regression model was developed using a limited number of shot characteristics, including distance, shot subtype, time remaining, and shot angle. Important contextual factors such as defender proximity, defensive pressure, player movement, and shot difficulty beyond the recorded characteristics were not included. Consequently, the model cannot fully account for the circumstances surrounding individual attempts.
+
+Second, SSQ measures the expected value of shots attempted rather than a player's ability to create scoring opportunities. A player receiving an uncontested dunk may record a high SSQ, but this does not necessarily indicate that the player independently generated the opportunity. Similarly, SMP may reflect both individual shooting ability and unmeasured differences in shot difficulty.
+
+Third, Points Above Expected (PAE) is influenced by shot volume. Players attempting more shots have greater opportunities to accumulate positive or negative PAE, making direct comparisons between high-volume and low-volume players potentially misleading.
+
+The analysis also relied on an approximate exclusion of end-of-period heaves to improve consistency across seasons. Because this adjustment was refined after preliminary examination of the test dataset, the final testing procedure was not entirely independent of earlier analytical decisions.
+
+Finally, the negative correlation between SSQ and SMP must be interpreted cautiously because SMP is calculated by subtracting SSQ from actual points per attempt. This mathematical relationship may contribute to the observed negative association rather than indicating a purely behavioural relationship between shot selection and shooting performance.
+
+Overall, these limitations suggest that the developed metrics should be understood as descriptive tools for evaluating shooting outcomes relative to model expectations, rather than definitive measures of individual offensive ability.
+
+# 6. Conclusion
+
+This study examined the relationship between shot selection and shot-making performance in the NBA using logistic regression and shot-level data from the 2023–24 through 2025–26 seasons. By developing a model to estimate shooting probabilities and expected points per attempt, three performance metrics were established: Shot Selection Quality (SSQ), Shot-Making Performance (SMP), and Points Above Expected (PAE).
+
+The results demonstrated that attempting higher-value shots does not necessarily correspond with greater performance relative to expectations. Although SSQ was moderately positively correlated with actual points per attempt, individual players demonstrated considerable differences in their shooting performance. Comparisons involving Kevin Durant, DeMar DeRozan, Rudy Gobert, Jakob Poeltl, Stephen Curry, and LeBron James further illustrated how contrasting shot profiles can produce different scoring outcomes.
+
+While the model was limited by the absence of several contextual factors, the developed metrics provide a useful framework for evaluating shooting performance beyond traditional field goal percentage.
+
+Ultimately, this project demonstrates how statistical modelling can be used to distinguish between the expected value of a shot and a player's actual scoring performance. Future research could incorporate defensive pressure, player tracking data, and additional contextual variables to develop more comprehensive measures of shot quality and offensive performance.
+
+\newpage
+
+# References
+
+Cervone, D., D’Amour, A., Bornn, L., & Goldsberry, K. (2016). A multiresolution stochastic process model for predicting basketball possession outcomes. *Journal of the American Statistical Association, 111*(514), 585–599. https://doi.org/10.1080/01621459.2016.1141685
+
+Miller, A. C., Bornn, L., Adams, R. P., & Goldsberry, K. (2014). Factorized point process intensities: A spatial analysis of professional basketball. In *Proceedings of the 31st International Conference on Machine Learning* (Vol. 32, pp. 235–243). Proceedings of Machine Learning Research. https://proceedings.mlr.press/v32/miller14.html
+
+Skinner, B. (2012). The problem of shot selection in basketball. *PLOS ONE, 7*(1), Article e30776. https://doi.org/10.1371/journal.pone.0030776

@@ -1,0 +1,2035 @@
+---
+title: "NBA Shot Selection"
+output: html_document
+date: "2026-11-24"
+---
+
+```{r}
+library(hoopR)
+library(tidyverse)
+library(janitor)
+library(httr2)
+library(jsonlite)
+library(ggrepel)
+library(scales)
+library(sportyR)
+```
+
+```{r}
+shots_2024 <- hoopR::load_nba_stats_shots(
+  seasons = 2023
+)
+
+shots_2024 |>
+  count(season_type_id)
+```
+
+```{r}
+sum(duplicated(shots_2024))
+
+shots_2024 |>
+  count(shot_value)
+
+shots_2024 |>
+  filter(duplicated(shots_2024))
+```
+
+
+```{r}
+shots_2024 <- shots_2024 |>
+  mutate(
+    made = if_else(shot_result == "Made", 1, 0)
+  )
+fg_percentage_2024 <- sum(shots_2024$made)/length(shots_2024$made)
+```
+
+```{r}
+shots_2024_B <- shots_2024 |>  
+  group_by(shot_distance) |> 
+  summarise(fg_percentage = sum(made)/length(made), attempts = length(made))
+
+total_attempts_2024 <- sum(shots_2024_B$attempts)
+
+
+```
+
+```{r}
+ggplot(data = shots_2024_B, aes(x = shot_distance, y = fg_percentage)) +
+  geom_col()
+
+ggplot(shots_2024_B, aes(x = shot_distance, y = fg_percentage)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "loess", se = FALSE) 
+  
+```
+
+```{r}
+shots_2024 <- shots_2024 |> mutate(over_40 = if_else(shot_distance >= 40, 1, 0)) 
+shots_2024_B3 <- shots_2024 |> filter(over_40 == 1)
+
+shots_over_40 <- (nrow(shots_2024_B3)/total_attempts_2024)*100
+
+
+```
+
+```{r}
+head(shots_2024$clock, 10)
+
+shots_2024 |>
+  filter(shot_distance >= 40) |>
+  select(period, clock, shot_distance) |>
+  head(15)
+```
+```{r}
+shots_2024 <- shots_2024 |>
+  mutate(
+    minutes = as.numeric(str_extract(clock, "\\d+(?=M)")),
+    seconds = as.numeric(str_extract(clock, "\\d+\\.\\d+(?=S)")),
+    time_remaining = minutes * 60 + seconds,
+    under_3s = if_else(time_remaining <= 3, 1, 0)
+  ) |>
+  filter(
+    !(shot_distance >= 36 &
+      time_remaining <= 3 &
+      period <= 3)
+  )
+
+shots_2024_C <- shots_2024 |> filter(shot_distance >= 40)
+
+total_attempts_over_40ft <- nrow(shots_2024_C)
+
+shots_2024_D <- shots_2024 |> filter(shot_distance >= 40, under_3s == 1)
+
+total_attempts_under_3s_over_40ft<- nrow(shots_2024_D)
+
+shots_o40ft_u3s <- (total_attempts_under_3s_over_40ft/total_attempts_over_40ft) * 100
+
+shots_o40ft_u3s
+
+```
+
+```{r}
+shots_30ft_39ft <- shots_2024 |>
+  filter(shot_distance >= 30, shot_distance < 40) |>
+  summarise(
+    total_attempts = n(),
+    under_3_attempts = sum(under_3s),
+    percentage = (under_3_attempts / total_attempts) * 100
+  )
+
+shots_20ft_29ft <- shots_2024 |>
+  filter(shot_distance >= 20, shot_distance < 30) |>
+  summarise(
+    total_attempts = n(),
+    under_3_attempts = sum(under_3s),
+    percentage = (under_3_attempts / total_attempts) * 100
+  )
+
+```
+
+```{r}
+shots_2024_likelhood_under3s <- shots_2024 |>
+  group_by(shot_distance) |> 
+  summarise(
+    total_attempts = n(),
+    under_3s_attempts = sum(under_3s),
+    percentage = (under_3s_attempts / total_attempts))
+ 
+```
+
+```{r}
+ggplot(shots_2024_likelhood_under3s, aes(x=shot_distance, y=percentage)) + 
+  geom_smooth() +
+  geom_point()
+```
+
+```{r}
+shots_2024_subtype <- shots_2024 |> group_by(sub_type) |> summarise(avg_distance = mean(shot_distance)) |> arrange(avg_distance)
+
+shots_2024_subtype
+```
+
+```{r}
+shots_2024_shot_type_comparison <- shots_2024 |>
+  filter(
+    sub_type == "Jump Shot" |
+    sub_type == "Pullup Jump shot" |
+    sub_type == "Step Back Jump shot"
+  )
+```
+
+```{r}
+ggplot(shots_2024_shot_type_comparison,
+       aes(x = sub_type, y = shot_distance)) +
+  geom_boxplot()
+```
+
+```{r}
+shot_comparison_20ft_29ft <- shots_2024_shot_type_comparison |> 
+  filter(shot_distance >19, shot_distance <30) |> 
+  group_by(sub_type) |> 
+  summarise(
+    total_attempts = n(),
+    made_shots_total = sum(made),
+    fg_percentage = made_shots_total/total_attempts
+  )
+  
+```
+
+```{r}
+shots_2024 |>
+  filter(shot_distance >19, shot_distance <30) |>
+  mutate(distance_group = floor(shot_distance / 2) * 2) |>
+  group_by(distance_group) |>
+  summarise(
+    attempts = n(),
+    made = sum(made),
+    fg_percentage = made/attempts
+  )
+```
+
+```{r}
+shots_by_distance_and_subtype <- shots_2024 |>
+  filter(shot_distance >19, shot_distance <30) |>
+  filter(
+    sub_type == "Jump Shot" |
+    sub_type == "Pullup Jump shot" |
+    sub_type == "Step Back Jump shot"
+  ) |> 
+  mutate(distance_group = floor(shot_distance / 2) * 2) |>
+  group_by(distance_group, sub_type) |>
+  summarise(
+    attempts = n(),
+    made = sum(made),
+    fg_percentage = made/attempts
+  )
+```
+
+```{r}
+ggplot(shots_by_distance_and_subtype, aes(x = distance_group, y = fg_percentage, color = sub_type)) +
+  geom_line() +
+  geom_point()
+```
+
+```{r}
+player_shots_value <- shots_2024 |> mutate(total_points = made*shot_value) |> 
+  group_by(person_id, player_name) |>
+  summarise(
+    attempts = n(),
+    total_score = sum(total_points),
+    points_per_attempt = total_score/attempts,
+    field_goals_made = sum(made)
+  ) |> 
+  arrange(desc(points_per_attempt)) |> 
+  filter(field_goals_made >= 300) |> 
+  head(10)
+  
+```
+
+
+### Modell 1
+```{r}
+model_1 <- glm(made ~ shot_distance, data = shots_2024, family = binomial)
+
+summary(model_1)
+```
+
+```{r}
+shots_2024 <- shots_2024 |>
+  mutate(xfg = predict(model_1, type = "response"), xPts = xfg * shot_value)
+```
+
+```{r}
+player_table <- shots_2024 |>
+  group_by(person_id, player_name) |>
+  summarise(
+    attempts = n(),
+    fg_made = sum(made),
+    total_points = sum(made * shot_value),
+    xPts = sum(xfg * shot_value),
+    PAE = total_points - xPts,
+    SMP = PAE/attempts
+  ) |> 
+  filter(fg_made > 299) |> 
+  arrange(desc(SMP))
+
+player_table
+
+```
+
+## Model 2
+
+```{r}
+model_2 <- glm(made ~ shot_distance + sub_type, data = shots_2024, family = binomial)
+
+summary(model_2)
+```
+
+```{r}
+anova(model_1, model_2, test = "Chisq")
+```
+
+## Training and Testing
+
+```{r}
+hoopR::load_nba_stats_shots(seasons = 2024)
+```
+
+
+
+```{r}
+# Load 2024-25 NBA shot data
+shots_2025 <- hoopR::load_nba_stats_shots(seasons = 2024) |>
+  mutate(
+    made = if_else(shot_result == "Made", 1, 0)
+  )
+
+# Check dataset size
+nrow(shots_2025)
+
+# Check for missing values
+colSums(is.na(shots_2025))
+
+# Check shot subtypes
+unique(shots_2025$sub_type)
+
+# Identify subtypes not present in training data
+setdiff(
+  unique(shots_2025$sub_type),
+  unique(shots_2024$sub_type)
+)
+```
+```{r}
+shots_2025 <- shots_2025 |>
+  mutate(
+    made = if_else(shot_result == "Made", 1, 0),
+    minutes = as.numeric(str_extract(clock, "\\d+(?=M)")),
+    seconds = as.numeric(str_extract(clock, "\\d+\\.\\d+(?=S)")),
+    time_remaining = minutes * 60 + seconds,
+    under_3s = if_else(time_remaining <= 3, 1, 0),
+    shot_angle = atan2(abs(x_legacy), y_legacy),
+    at_origin = if_else(x_legacy == 0 & y_legacy == 0, 1, 0)
+  ) |>
+  filter(
+    !(shot_distance >= 36 &
+      time_remaining <= 3 &
+      period <= 3)
+  )
+```
+
+
+```{r}
+predict(
+  object = model_1,
+  newdata = shots_2025,
+  type = "response"
+)
+```
+
+
+```{r}
+shots_2025<- shots_2025 |>
+  mutate(xfg_model1 = predict(
+    object = model_1,
+    newdata = shots_2025,
+    type = "response"
+  ))
+```
+
+
+```{r}
+mean((shots_2025$xfg_model1 - shots_2025$made)^2)
+```
+
+```{r}
+shots_2025 <- shots_2025 |> 
+  mutate(xfg_model2 = predict(
+    object = model_2,
+    newdata = shots_2025,
+    type = "response"
+)) 
+
+mean((shots_2025$xfg_model2 - shots_2025$made)^2)
+```
+## Calibration
+```{r}
+shots_2025_prob_bins <- shots_2025 |> 
+  mutate(
+    probaility_bin = cut(xfg_model2, breaks = seq(0, 1, by = 0.1), include.lowest = TRUE)) |> 
+  group_by(probaility_bin) |> 
+  summarise(
+    attempts = n(),
+    fg_made = sum(made),
+    fg_percentage = fg_made/attempts,
+    xfg_m1 = mean(xfg_model1),
+    xfg_m2 = mean(xfg_model2)
+  )
+```
+
+## Investigate 
+
+```{r}
+shots_2025_probability_summary <- shots_2025 |> 
+  mutate(
+    probaility_bin = cut(xfg_model2, breaks = seq(0, 1, by = 0.1), include.lowest = TRUE),
+    minutes = as.numeric(str_extract(clock, "\\d+(?=M)")),
+    seconds = as.numeric(str_extract(clock, "\\d+\\.\\d+(?=S)")),
+    time_remaining = minutes * 60 + seconds,
+    under_3s = if_else(time_remaining <= 3, 1, 0)
+    ) |> 
+  group_by(probaility_bin) |> 
+  summarise(
+    attempts = n(),
+    avg_distance = mean(shot_distance),
+    median_distance = median(shot_distance),
+    avg_time_left = mean(time_remaining),
+    pct_under_3s = mean(under_3s),
+    min_distance = min(shot_distance),
+    max_distance = max(shot_distance)
+    )
+
+
+
+```
+
+
+```{r}
+shots_2025_probability_summary_30ft_39ft <- shots_2025 |>
+  mutate(
+    distance_bin = cut(
+      shot_distance,
+      breaks = seq(0, 90, by = 5),
+      include.lowest = TRUE
+    ),
+    minutes = as.numeric(str_extract(clock, "\\d+(?=M)")),
+    seconds = as.numeric(str_extract(clock, "\\d+\\.\\d+(?=S)")),
+    time_remaining = minutes * 60 + seconds,
+    under_3s = if_else(time_remaining <= 3, 1, 0)
+  ) |>
+  group_by(distance_bin, under_3s) |>
+  summarise(
+    attempts = n(),
+    fg_percentage = mean(made),
+    .groups = "drop"
+  )
+  
+```
+
+### Model 3
+
+```{r}
+model_3 <- glm(made ~ shot_distance + sub_type + under_3s, shots_2024, family = binomial)
+
+summary(model_3)
+```
+```{r}
+shots_2025 <- shots_2025 |> 
+  mutate(
+    probaility_bin = cut(xfg_model2, breaks = seq(0, 1, by = 0.1), include.lowest = TRUE),
+    minutes = as.numeric(str_extract(clock, "\\d+(?=M)")),
+    seconds = as.numeric(str_extract(clock, "\\d+\\.\\d+(?=S)")),
+    time_remaining = minutes * 60 + seconds,
+    under_3s = if_else(time_remaining <= 3, 1, 0)
+    )
+
+shots_2025 <- shots_2025 |> 
+  mutate(xfg_model3 = predict(
+    object = model_3,
+    newdata = shots_2025,
+    type = 'response'
+  ))
+```
+
+
+```{r}
+mean((shots_2025$xfg_model3 - shots_2025$made)^2)
+```
+
+```{r}
+shots_2025_model2_model3 <- shots_2025 |> 
+  group_by(under_3s) |> 
+  summarise(
+    attempts = n(),
+    fg_percentage = mean(made),
+    breir_model2 = mean((xfg_model2 - made)^2),
+    breir_model3 = mean((xfg_model3 - made)^2),
+    avg_xfg_model2 = mean(xfg_model2),
+    avg_xfg_model3 = mean(xfg_model3)
+  )
+```
+
+## model 4
+
+```{r}
+model_4 = glm(made ~ shot_distance + I(shot_distance^2) + sub_type + under_3s, shots_2024, family = binomial)
+
+summary(model_4)
+```
+
+```{r}
+shots_2025 <- shots_2025 |> 
+  mutate(xfg_model4 = predict(
+    object = model_4,
+    newdata = shots_2025,
+    type = 'response'
+  )
+  )
+```
+
+
+```{r}
+mean((shots_2025$xfg_model4-shots_2025$made)^2)
+```
+
+## Compare M3 and M4 on long disance
+
+```{r}
+shots_comparison <- shots_2025 |> 
+  group_by(shot_distance) |> 
+  filter(shot_distance > 39) |> 
+  summarize(
+    attempts = n(),
+    fg_made = mean(made),
+    xfg_model_3 = mean(xfg_model3),
+    xfg_model_4 = mean(xfg_model4),
+    breir_m3 = mean((xfg_model3 - made)^2),
+    breir_m4 = mean((xfg_model4 - made)^2)
+  )
+```
+
+```{r}
+shots_2025_over_40ft <- shots_2025 |> 
+  filter(shot_distance > 39) |> 
+  summarise(
+    attempts = n(),
+    actual_fg = mean(made),
+    avg_xfg_model3 = mean(xfg_model3),
+    avg_xfg_model4 = mean(xfg_model4),
+    breir_m3 = mean((xfg_model3 - made)^2),
+    breir_m4 = mean((xfg_model4 - made)^2), 
+  )
+```
+
+## Model 5
+
+```{r}
+model_5 <- glm(
+  made ~ splines::ns(shot_distance, df = 4) +
+    sub_type +
+    under_3s,
+  data = shots_2024,
+  family = binomial
+)
+
+summary(model_5)
+```
+
+```{r}
+shots_2025 <- shots_2025 |> 
+  mutate(xfg_model5 = predict(
+    object = model_5,
+    newdata = shots_2025,
+    type = 'response'
+  ))
+
+mean((shots_2025$xfg_model5-shots_2025$made)^2)
+```
+```{r}
+shots_2025_over_40ft <- shots_2025 |> 
+  filter(shot_distance > 39) |> 
+  summarise(
+    attempts = n(),
+    actual_fg = mean(made),
+    avg_xfg_model3 = mean(xfg_model3),
+    avg_xfg_model4 = mean(xfg_model4),
+    avg_xfg_mdoel5 = mean(xfg_model5),
+    breir_m3 = mean((xfg_model3 - made)^2),
+    breir_m4 = mean((xfg_model4 - made)^2), 
+    breir_m5 = mean((xfg_model5 - made)^2)
+  )
+```
+
+
+```{r}
+shots_2025_comparison_M3_M5 <- shots_2025 |> 
+  mutate(distance_bin = cut(shot_distance, breaks = seq(40, 90, by = 5), include.lowest = TRUE)) |> 
+  filter(shot_distance >39) |> 
+  group_by(distance_bin) |> 
+  summarise(
+    attempts = n(),
+    real_fg = mean(made),
+    avg_xfg_model3 = mean(xfg_model3),
+    avg_xfg_model5 = mean(xfg_model5)
+    
+  )
+```
+
+## X and Y leagcy invetsiagtion
+
+```{r}
+
+mean(shots_2024$x_legacy)
+mean(shots_2024$y_legacy)
+
+median(shots_2024$x_legacy)
+median(shots_2024$y_legacy)
+
+
+max(shots_2024$x_legacy)
+max(shots_2024$y_legacy)
+
+
+min(shots_2024$x_legacy)
+min(shots_2024$y_legacy)
+```
+
+```{r}
+ggplot(shots_2024, aes(x = x_legacy, y = y_legacy)) +
+  geom_point(alpha = 0.05)
+```
+
+```{r}
+shots_2024 <- shots_2024 |> 
+  mutate(shot_angle = atan2(abs(x_legacy), y_legacy))
+```
+
+```{r}
+shots_2024 |> filter(shot_angle > pi/2) |> 
+  summarise(
+    total = n(),
+    avg_distance = mean(shot_distance),
+    fg_percentage = mean(made)
+  )
+```
+
+```{r}
+shots_2024 |> filter(x_legacy == 0 & y_legacy == 0) |> 
+  summarise(
+    total = n(),
+    avg_distance = mean(shot_distance),
+    fg_percentage = mean(made)
+  )
+```
+
+```{r}
+shots_2024 |>  filter(x_legacy == 0 & y_legacy == 0) |>
+  count(sub_type, sort = TRUE)
+```
+
+```{r}
+shots_2024 <- shots_2024 |> 
+  mutate(at_origin = if_else(x_legacy == 0 & y_legacy == 0, 1, 0))
+
+shots_2025 <- shots_2025 |> 
+  mutate(shot_angle = atan2(abs(x_legacy), y_legacy),
+         at_origin = if_else(x_legacy == 0 & y_legacy == 0, 1, 0))
+```
+
+## Model 6
+
+```{r}
+model_6 <- glm(
+  made ~ splines::ns(shot_distance, df = 4) +
+    sub_type +
+    under_3s +
+    shot_angle +
+    at_origin,
+  data = shots_2024,
+  family = binomial
+)
+
+summary(model_6)
+```
+
+```{r}
+shots_2025 <- shots_2025 |> 
+  mutate(xfg_model6 = predict(
+         object = model_6,
+         newdata = shots_2025,
+         type = 'response'))
+```
+
+
+```{r}
+mean((shots_2025$xfg_model6 - shots_2025$made)^2)
+```
+## M6 Calibration
+
+
+```{r}
+shots_2025_prob_bins <- shots_2025 |> 
+  mutate(
+    probaility_bin = cut(xfg_model6, breaks = seq(0, 1, by = 0.1), include.lowest = TRUE)) |> 
+  group_by(probaility_bin) |> 
+  summarise(
+    attempts = n(),
+    fg_made = sum(made),
+    fg_percentage = fg_made/attempts,
+    xfg_m1 = mean(xfg_model1),
+    xfg_m2 = mean(xfg_model2),
+    xfg_m3 = mean(xfg_model3),
+    xfg_m4 = mean(xfg_model4),
+    xfg_m5 = mean(xfg_model5),
+    xfg_m6 = mean(xfg_model6)
+  )
+```
+
+## Investiagte M6
+
+```{r}
+shots_2025_prob_bins_01_02 <- shots_2025 |> 
+  mutate(
+    probaility_bin = cut(xfg_model6, breaks = seq(0, 1, by = 0.1), include.lowest = TRUE)) |>
+  filter(xfg_model6 > 0.1 & xfg_model6 <= 0.2) |> 
+  summarise(
+    attemtpts = n(),
+    fg_percentag = mean(made),
+    avg_distance = mean(shot_distance),
+    attempts_under_3s = mean(under_3s)
+  )
+```
+
+
+```{r}
+shots_2025 |>
+  filter(xfg_model6 > 0.1 & xfg_model6 <= 0.2) |>
+  count(sub_type, sort = TRUE)
+```
+
+
+```{r}
+shots_2025_m6_subtype <- shots_2025 |> 
+  filter(xfg_model6 > 0.1 & xfg_model6 <= 0.2) |> 
+  group_by(sub_type) |> 
+  summarise(
+    attempts = n(),
+    actual_fg = mean(made),
+    predicted_fg = mean(xfg_model6),
+    avg_distance = mean(shot_distance),
+    pct_under_3s = mean(under_3s)
+  )
+```
+
+```{r}
+shots_2025_tip_layups <- shots_2025 |> 
+  filter(sub_type == "Tip Layup Shot") |> 
+  filter(xfg_model6 > 0.1 & xfg_model6 <= 0.2)
+```
+
+
+```{r}
+ggplot(shots_2025_tip_layups, aes(x = shot_distance, y = shot_angle)) +
+  geom_point()
+```
+
+```{r}
+shots_2025_Tip_layup_distance <- shots_2025 |> 
+  filter(sub_type == "Tip Layup Shot") |> 
+  group_by(shot_distance) |> 
+  summarise(
+    attempts = n(),
+    fg_per = mean(made),
+    xfg5 = mean(xfg_model5),
+    xfg6 = mean(xfg_model6)
+  )
+  
+  
+```
+
+```{r}
+shots_2024_Tip_layup_distance <- shots_2024 |> 
+  filter(sub_type == "Tip Layup Shot") |> 
+  group_by(shot_distance) |> 
+  summarise(
+    attempts = n(),
+    fg_per = mean(made),
+  )
+```
+
+```{r}
+shots_2024_tip_shots <- shots_2024 |> 
+  filter(sub_type == "Tip Layup Shot") |> 
+  summarise(
+    atempts = n(),
+    tip_distance = mean(shot_distance),
+    fg_per = mean(made)
+  )
+
+shots_2025_tip_shots <- shots_2025 |> 
+  filter(sub_type == "Tip Layup Shot") |> 
+  summarise(
+    atempts = n(),
+    tip_distance = mean(shot_distance),
+    fg_per = mean(made)
+  )
+```
+
+
+## Baseline Model
+
+```{r}
+fg_2024 <- mean(shots_2024$made)
+```
+
+```{r}
+mean((fg_2024 - shots_2025$made)^2)
+```
+
+## New Dataset 2026
+```{r}
+shots_2026 <- hoopR::load_nba_stats_shots(
+  seasons = 2025
+)
+```
+
+```{r}
+shots_2026 <- shots_2026 |> 
+  mutate(made = if_else(shot_result == 'Made', 1, 0),
+         minutes = as.numeric(str_extract(clock, "\\d+(?=M)")),
+         seconds = as.numeric(str_extract(clock, "\\d+\\.\\d+(?=S)")),
+         time_remaining = minutes * 60 + seconds,
+         under_3s = if_else(time_remaining <= 3, 1, 0),
+         shot_angle = atan2(abs(x_legacy), y_legacy),
+         at_origin = if_else(x_legacy == 0 & y_legacy == 0, 1, 0),
+         )  |> 
+  filter(!(shot_distance >= 36 &
+         time_remaining <= 3 &
+         period <= 3))
+
+shots_2026 <- shots_2026 |>
+  mutate(xfg_model6 = predict(
+    object = model_6,
+    newdata = shots_2026,
+    type = 'response'
+  ))
+```
+
+```{r}
+mean((shots_2026$xfg_model6 - shots_2026$made)^2)
+```
+```{r}
+shots_2026_prob_bins <- shots_2026 |> 
+  mutate(
+    probaility_bin = cut(xfg_model6, breaks = seq(0, 1, by = 0.1), include.lowest = TRUE)) |> 
+  group_by(probaility_bin) |> 
+  summarise(
+    attempts = n(),
+    fg_made = sum(made),
+    fg_percentage = fg_made/attempts,
+    xfg_m6 = mean(xfg_model6),
+    
+  )
+```
+
+```{r}
+shots_2026 |> 
+  filter(xfg_model6 <= 0.1) |> 
+  count(sub_type)
+```
+```{r}
+shots_2026 |> 
+  filter(xfg_model6 <= 0.1) |> 
+  select(
+    shot_distance,
+    sub_type,
+    under_3s,
+    shot_angle,
+    at_origin,
+    made,
+    xfg_model6
+  )
+```
+
+```{r}
+shots_2026 |>
+  filter(shot_distance > 39) |> 
+  nrow()
+
+shots_2026 |>
+  filter(shot_distance > 39) |>
+  summarise(
+    attempts = n(),
+    made = sum(made),
+  )
+```
+
+
+### Player anyalsis
+```{r}
+shots_2026 <- shots_2026 |> 
+  mutate( 
+    xPts = xfg_model6 * shot_value,
+    actual_pts = shot_value*made
+          )
+  
+```
+
+
+### Shot Selection Quality
+
+```{r}
+shots_2026_player_table <- shots_2026 |> 
+  group_by(person_id, player_name) |> 
+  summarise(
+    attempts = n(),
+    Total_xPts = sum(xPts),
+    SSQ = Total_xPts/attempts
+  )
+```
+## Shot Making Performance
+
+```{r}
+shots_2026_player_table <- shots_2026 |> 
+  group_by(person_id, player_name) |> 
+  summarise(
+    attempts = n(),
+    actual_points = sum(actual_pts),
+    Total_xPts = sum(xPts),
+    SSQ = Total_xPts/attempts,
+    SMP = (actual_points - Total_xPts)/attempts
+  )
+```
+
+### Points Above Expected
+
+```{r}
+shots_2026_player_table <- shots_2026 |> 
+  group_by(person_id, player_name) |> 
+  summarise(
+    attempts = n(),
+    actual_points = sum(actual_pts),
+    Total_xPts = sum(xPts),
+    SSQ = Total_xPts/attempts,
+    SMP = (actual_points - Total_xPts)/attempts,
+    PAE = round(actual_points - Total_xPts, 2)
+  )
+```
+
+## Filter players by 300 FGA
+```{r}
+shots_2026_qualified <- shots_2026_player_table |> 
+  filter(attempts > 299)
+```
+
+
+## Quadrant Plot
+
+```{r}
+league_avg_SSQ <- mean(shots_2026$xPts)
+```
+
+```{r}
+
+# League average SSQ for qualified players
+league_avg_SSQ <- mean(shots_2026_qualified$SSQ, na.rm = TRUE)
+
+# Players to highlight
+featured_players <- shots_2026_qualified |>
+  filter(
+    person_id %in% c(
+      2544,     # LeBron James
+      201142,   # Kevin Durant
+      201939,   # Stephen Curry
+      201942,   # DeMar DeRozan
+      1627751,  # Jakob Poeltl
+      203497    # Rudy Gobert
+    )
+  ) |>
+  mutate(
+    display_name = case_when(
+      person_id == 2544 ~ "LeBron James",
+      person_id == 201142 ~ "Kevin Durant",
+      person_id == 201939 ~ "Stephen Curry",
+      person_id == 201942 ~ "DeMar DeRozan",
+      person_id == 1627751 ~ "Jakob Poeltl",
+      person_id == 203497 ~ "Rudy Gobert"
+    )
+  )
+
+# Colors
+bg <- "#101827"
+panel <- "#172235"
+white <- "#F8FAFC"
+muted <- "#A8B8CF"
+highlight_color <- "#38BDF8"
+
+nba_quadrant_plot <- ggplot(
+  shots_2026_qualified,
+  aes(x = SSQ, y = SMP)
+) +
+
+  # background points
+  geom_point(
+    color = "#94A3B8",
+    alpha = 0.25,
+    size = 1.8
+  ) +
+
+  # reference lines
+  geom_hline(
+    yintercept = 0,
+    color = "#CBD5E1",
+    linetype = "dashed",
+    linewidth = 0.5,
+    alpha = 0.75
+  ) +
+  geom_vline(
+    xintercept = league_avg_SSQ,
+    color = "#CBD5E1",
+    linetype = "dashed",
+    linewidth = 0.5,
+    alpha = 0.75
+  ) +
+
+  # highlighted points
+  geom_point(
+    data = featured_players,
+    color = highlight_color,
+    size = 4
+  ) +
+
+  # highlighted labels
+  geom_text_repel(
+    data = featured_players,
+    aes(label = display_name),
+    color = white,
+    size = 3.2,
+    fontface = "bold",
+    box.padding = 0.7,
+    point.padding = 0.5,
+    force = 3,
+    force_pull = 0.6,
+    max.overlaps = Inf,
+    seed = 42,
+    min.segment.length = 0,
+    segment.color = "#94A3B8",
+    segment.alpha = 0.8
+  ) +
+
+  labs(
+    title = "GOOD SHOT, BAD SHOT?",
+    subtitle = "NBA 2025–26 | Shot Selection vs. Shot-Making Performance",
+    x = "SHOT SELECTION QUALITY (Expected Points per Attempt)",
+    y = "SHOT-MAKING PERFORMANCE (SMP)",
+    caption = "300+ FGA | Heave-adjusted sample | Dashed lines represent league averages"
+  ) +
+
+  scale_x_continuous(
+    expand = expansion(mult = c(0.08, 0.08))
+  ) +
+  scale_y_continuous(
+    expand = expansion(mult = c(0.12, 0.12))
+  ) +
+
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.background = element_rect(fill = bg, color = NA),
+    panel.background = element_rect(fill = panel, color = NA),
+
+    panel.grid.major = element_line(color = "#344155", linewidth = 0.3),
+    panel.grid.minor = element_blank(),
+
+    plot.title = element_text(
+      color = white,
+      face = "bold",
+      size = 15,
+      margin = margin(b = 4)
+    ),
+    plot.subtitle = element_text(
+      color = muted,
+      size = 8.5,
+      margin = margin(b = 8)
+    ),
+    plot.caption = element_text(
+      color = muted,
+      size = 8,
+      hjust = 1,
+      margin = margin(t = 8)
+    ),
+
+    axis.title.x = element_text(
+      color = white,
+      face = "bold",
+      size = 9,
+      margin = margin(t = 8)
+    ),
+    axis.title.y = element_text(
+      color = white,
+      face = "bold",
+      size = 9,
+      margin = margin(r = 8)
+    ),
+    axis.text = element_text(
+      color = white,
+      size = 8.5
+    ),
+
+    legend.position = "none",
+
+    plot.margin = margin(t = 12, r = 18, b = 12, l = 18)
+  )
+
+nba_quadrant_plot
+
+ggsave(
+  "Good_Shot_Bad_Shot_2026.png",
+  plot = nba_quadrant_plot,
+  width = 14,
+  height = 9,
+  dpi = 300,
+  bg = bg
+)
+```
+## Leaderboards
+
+```{r}
+shots_2026_top10_SSQ <- shots_2026_qualified |>
+  arrange(desc(SSQ)) |>
+  head(n = 10)
+```
+
+```{r}
+shots_2026_top10_SMP <- shots_2026_qualified |>
+  arrange(desc(SMP)) |>
+  head(n = 10)
+```
+
+```{r}
+shots_2026_top10_PAE <- shots_2026_qualified |>
+  arrange(desc(PAE)) |>
+  head(n = 10)
+```
+
+
+## SSQ vs SMP
+```{r}
+cor_SSQ_SMP <- cor(shots_2026_qualified$SSQ, shots_2026_qualified$SMP)
+cor_SSQ_SMP^2
+
+```
+```{r}
+shots_2026_qualified <- shots_2026_qualified |> 
+  mutate(actual_PPA = actual_points/attempts)
+```
+
+```{r}
+cor_SSQ_actualPPA <- cor(shots_2026_qualified$SSQ, shots_2026_qualified$actual_PPA)
+cor_SSQ_actualPPA^2
+
+```
+### Heat Maps
+
+```{r}
+Shots_2026_xy_min_max <- shots_2026 |>
+  summarise(
+    min_x = min(x_legacy),
+    max_x = max(x_legacy),
+    min_y = min(y_legacy),
+    max_y = max(y_legacy)
+  )
+```
+
+```{r}
+shots_2026 <- shots_2026 |> 
+  mutate(
+    x_bin = floor(x_legacy / 25) * 25,
+    y_bin = floor(y_legacy / 25) * 25
+  )
+```
+
+```{r}
+shots_2026_court_bins <- shots_2026 |> 
+  group_by(x_bin, y_bin) |> 
+  summarize(
+    attemtps = n(),
+    avg_xPts = mean(xPts),
+    avg_actual_pts = mean(actual_pts),
+    spatial_points = avg_actual_pts - avg_xPts
+  ) 
+
+shots_2026_court_bins <- shots_2026_court_bins|> 
+  filter(attemtps > 29)
+```
+```{r}
+shots_2026_court_bins <- shots_2026_court_bins |>
+  mutate(
+    court_x = (x_bin + 12.5) / 10,
+    court_y = (y_bin + 12.5) / 10 - 41.75
+  )
+head(shots_2026_court_bins)
+```
+
+```{r}
+
+
+shots_2026_court_filtered <- shots_2026_court_bins |>
+  filter(
+    attemtps >= 30,
+    !is.na(avg_xPts)
+  )
+
+# Colour palette
+bg <- "#101827"
+hardwood <- "#D5AD72"
+hardwood_light <- "#E5C390"
+court_lines <- "#FFFFFF"
+white <- "#FFFFFF"
+muted <- "#CBD5E1"
+
+nba_heatmap <- geom_basketball(
+  league = "NBA",
+  display_range = "offense",
+  rotation = 270,
+  color_updates = list(
+    plot_background = bg,
+    offensive_half_court = hardwood,
+    defensive_half_court = hardwood,
+    court_apron = bg,
+    two_point_range = c(hardwood, "#FFFFFF00"),
+    painted_area = c(hardwood_light, "#FFFFFF00"),
+    center_circle_fill = hardwood,
+    free_throw_circle_fill = hardwood,
+    sideline = court_lines,
+    endline = court_lines,
+    division_line = court_lines,
+    center_circle_outline = court_lines,
+    three_point_line = court_lines,
+    lane_boundary = court_lines,
+    free_throw_circle_outline = court_lines,
+    free_throw_circle_dash = court_lines,
+    lane_space_mark = court_lines,
+    restricted_arc = court_lines,
+    backboard = court_lines,
+    basket_ring = "#F97316"
+  )
+) +
+  geom_tile(
+    data = shots_2026_court_filtered,
+    aes(
+      x = court_x,
+      y = court_y,
+      fill = avg_xPts
+    ),
+    width = 2.5,
+    height = 2.5,
+    alpha = 0.6,
+    inherit.aes = FALSE
+  ) +
+  scale_fill_gradientn(
+    colours = c(
+      "#BBDCF9",
+      "#76B5E8",
+      "#3682BC",
+      "#155184",
+      "#071D40"
+    ),
+    values = scales::rescale(
+      c(0.65, 0.85, 1.05, 1.25, 1.50)
+    ),
+    limits = c(0.65, 1.50),
+    oob = scales::squish,
+    breaks = c(0.75, 1.00, 1.25, 1.50),
+    labels = label_number(accuracy = 0.01),
+    name = "EXPECTED POINTS\nPER ATTEMPT",
+    guide = guide_colorbar(
+      blegend.title = element_text(
+      colour = white,
+      size = 9,
+      face = "bold",
+      lineheight = 1.2,
+      margin = margin(b = 10)
+),
+      frame.colour = NA,
+      ticks.colour = white,
+      title.position = "top",
+      title.hjust = 0
+    )
+  ) +
+  coord_fixed(
+    xlim = c(-25, 25),
+    ylim = c(-47, -1),
+    ratio = 1,
+    expand = FALSE
+  ) +
+  labs(
+    title = "WHERE ARE THE NBA'S MOST VALUABLE SHOTS?",
+    subtitle = "GOOD SHOT, BAD SHOT?  |  NBA 2025–26",
+    caption = paste(
+      "Model 6 expected points  •  2.5-ft bins  •",
+      "30+ attempts per bin  •  Heave-adjusted"
+    )
+  ) +
+  theme_void(base_size = 11) +
+  theme(
+    plot.background = element_rect(
+      fill = bg,
+      colour = NA
+    ),
+
+    panel.background = element_rect(
+      fill = hardwood,
+      colour = NA
+    ),
+
+    plot.title = element_text(
+      colour = white,
+      face = "bold",
+      size = 14,
+      margin = margin(b = 3)
+    ),
+
+    plot.subtitle = element_text(
+      colour = "#38BDF8",
+      face = "bold",
+      size = 9,
+      margin = margin(b = 5)
+    ),
+
+    plot.caption = element_text(
+      colour = muted,
+      size = 7.5,
+      hjust = 0,
+      margin = margin(t = 5)
+    ),
+
+    legend.position = "right",
+
+    legend.title = element_text(
+      colour = white,
+      size = 9,
+      face = "bold",
+      lineheight = 1.1
+    ),
+
+    legend.text = element_text(
+      colour = muted,
+      size = 9
+    ),
+
+    legend.background = element_rect(
+      fill = bg,
+      colour = NA
+    ),
+
+    legend.key = element_rect(
+      fill = bg,
+      colour = NA
+    ),
+
+    legend.margin = margin(l = 4),
+
+    legend.box.margin = margin(0, 0, 0, 0),
+
+    plot.margin = margin(
+      t = 5,
+      r = 5,
+      b = 5,
+      l = 5
+    )
+  )
+
+nba_heatmap
+
+ggsave(
+  filename = "NBA_2026_Expected_Points_Heatmap.png",
+  plot = nba_heatmap,
+  width = 11,
+  height = 10,
+  dpi = 300,
+  bg = bg
+)
+
+
+```
+
+```{r}
+# Filter court locations
+shots_2026_spatial_filtered <- shots_2026_court_bins |>
+  filter(
+    attemtps >= 30,
+    !is.na(spatial_points)
+  )
+
+# Colour palette
+bg <- "#101827"
+hardwood <- "#D5AD72"
+hardwood_light <- "#E5C390"
+court_lines <- "#172235"
+white <- "#FFFFFF"
+muted <- "#CBD5E1"
+
+# NBA spatial shot-making heatmap
+nba_spatial_heatmap <- geom_basketball(
+  league = "NBA",
+  display_range = "offense",
+  rotation = 270,
+  color_updates = list(
+    plot_background = bg,
+    offensive_half_court = hardwood,
+    defensive_half_court = hardwood,
+    court_apron = bg,
+    two_point_range = c(hardwood, "#FFFFFF00"),
+    painted_area = c(hardwood_light, "#FFFFFF00"),
+    center_circle_fill = hardwood,
+    free_throw_circle_fill = hardwood,
+    sideline = court_lines,
+    endline = court_lines,
+    division_line = court_lines,
+    center_circle_outline = court_lines,
+    three_point_line = court_lines,
+    lane_boundary = court_lines,
+    free_throw_circle_outline = court_lines,
+    free_throw_circle_dash = court_lines,
+    lane_space_mark = court_lines,
+    restricted_arc = court_lines,
+    backboard = court_lines,
+    basket_ring = "#F97316"
+  )
+) +
+  geom_tile(
+    data = shots_2026_spatial_filtered,
+    aes(
+      x = court_x,
+      y = court_y,
+      fill = spatial_points
+    ),
+    width = 2.5,
+    height = 2.5,
+    alpha = 0.78,
+    inherit.aes = FALSE
+  ) +
+  scale_fill_gradient2(
+    low = "#2563A6",
+    mid = "#F2E5CE",
+    high = "#C24135",
+    midpoint = 0,
+    limits = c(-0.30, 0.30),
+    oob = scales::squish,
+    breaks = c(-0.30, -0.15, 0, 0.15, 0.30),
+    labels = function(x) sprintf("%+.2f", x),
+    name = "POINTS ABOVE\nEXPECTED / ATTEMPT",
+    guide = guide_colorbar(
+      barheight = grid::unit(4.2, "cm"),
+      barwidth = grid::unit(0.7, "cm"),
+      frame.colour = NA,
+      ticks.colour = white,
+      title.position = "top",
+      title.hjust = 0
+    )
+  ) +
+  coord_fixed(
+    xlim = c(-25, 25),
+    ylim = c(-47, -1),
+    ratio = 1,
+    expand = FALSE
+  ) +
+  labs(
+    title = "WHERE ARE NBA PLAYERS BEATING EXPECTATIONS?",
+    subtitle = "GOOD SHOT, BAD SHOT?  |  NBA 2025–26",
+    caption = paste(
+      "Model 6 shot-making residuals  •",
+      "2.5-ft bins  •",
+      "30+ attempts per bin  •",
+      "Heave-adjusted"
+    )
+  ) +
+  theme_void(base_size = 11) +
+  theme(
+    plot.background = element_rect(
+      fill = bg,
+      colour = NA
+    ),
+    panel.background = element_rect(
+      fill = hardwood,
+      colour = NA
+    ),
+    plot.title = element_text(
+      colour = white,
+      face = "bold",
+      size = 14,
+      margin = margin(b = 3)
+    ),
+    plot.subtitle = element_text(
+      colour = "#38BDF8",
+      face = "bold",
+      size = 9,
+      margin = margin(b = 5)
+    ),
+    plot.caption = element_text(
+      colour = muted,
+      size = 7.5,
+      hjust = 0,
+      margin = margin(t = 5)
+    ),
+    legend.position = "right",
+    legend.title = element_text(
+      colour = white,
+      size = 9,
+      face = "bold",
+      lineheight = 1.2,
+      margin = margin(b = 10)
+    ),
+    legend.text = element_text(
+      colour = muted,
+      size = 9
+    ),
+    legend.background = element_rect(
+      fill = bg,
+      colour = NA
+    ),
+    legend.key = element_rect(
+      fill = bg,
+      colour = NA
+    ),
+    legend.margin = margin(l = 4),
+    legend.box.margin = margin(0, 0, 0, 0),
+    plot.margin = margin(
+      t = 5,
+      r = 5,
+      b = 5,
+      l = 5
+    )
+  )
+
+nba_spatial_heatmap
+
+ggsave(
+  filename = "NBA_2026_Spatial_SMP_Heatmap.png",
+  plot = nba_spatial_heatmap,
+  width = 11,
+  height = 10,
+  dpi = 300,
+  bg = bg
+)
+```
+```{r}
+kevin_durant <- shots_2026 |> 
+ mutate(
+    distance_bin = cut(
+      shot_distance,
+      breaks = c(-1, 4, 9, 14, 22, 29, Inf),
+      labels = c(
+        "At Rim",
+        "Short Range",
+        "Midrange",
+        "Long Midrange",
+        "Three-Point Range",
+        "Deep"
+      )
+    )
+  ) |> 
+  filter(person_id == 201142)
+```
+
+```{r}
+
+durant_distance_summary <- kevin_durant|>
+  group_by(distance_bin) |>
+  summarise(
+    attempts = n(),
+    SSQ = mean(xPts, na.rm = TRUE),
+    actual_PPA = mean(actual_pts, na.rm = TRUE),
+    SMP = actual_PPA - SSQ,
+    PAE = sum(actual_pts - xPts, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+durant_distance_summary
+
+```
+```{r}
+league_shot_selection  <- shots_2026 |> 
+ mutate(
+    distance_bin = cut(
+      shot_distance,
+      breaks = c(-1, 4, 9, 14, 22, 29, Inf),
+      labels = c(
+        "At Rim",
+        "Short Range",
+        "Midrange",
+        "Long Midrange",
+        "Three-Point Range",
+        "Deep"
+      )
+    )) |> 
+  group_by(distance_bin) |>
+  summarise(
+    attempts = n(),
+    SSQ = mean(xPts, na.rm = TRUE),
+    actual_PPA = mean(actual_pts, na.rm = TRUE),
+    SMP = actual_PPA - SSQ,
+    PAE = sum(actual_pts - xPts, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+league_shot_selection
+```
+
+
+### Durant vs NBA Visuals
+
+```{r}
+comparison_NBA_KD <- bind_rows(
+  mutate(league_shot_selection, player = "NBA"),
+  mutate(durant_distance_summary, player = "Durant"),
+)
+
+comparison_NBA_KD <- comparison_NBA_KD |>
+  group_by(player) |>
+  mutate(
+    shot_share = round(attempts / sum(attempts) * 100, 2)
+  ) |>
+  ungroup()
+
+
+```
+
+```{r}
+ggplot(comparison_NBA_KD, aes(x = distance_bin, y = shot_share, fill = player)) +
+  geom_col(position = 'dodge')
+
+```
+
+```{r}
+
+ggplot(comparison, aes(x = distance_bin, y = SMP, fill = player)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Kevin Durant vs NBA Shot-Making Performance",
+    x = "Shot Distance",
+    y = "SMP"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(comparison_NBA_KD, aes(x = distance_bin, y = shot_share, fill = player)) +
+  geom_col(position = 'dodge')
+```
+```{r}
+ggplot(durant_distance_summary, aes(x = distance_bin, y = PAE)) +
+  geom_col()
+```
+
+### Curry 
+
+```{r}
+steph_curry <- shots_2026 |> 
+ mutate(
+    distance_bin = cut(
+      shot_distance,
+      breaks = c(-1, 4, 9, 14, 22, 29, Inf),
+      labels = c(
+        "At Rim",
+        "Short Range",
+        "Midrange",
+        "Long Midrange",
+        "Three-Point Range",
+        "Deep"
+      )
+    )
+  ) |> 
+  filter(person_id == 201939)
+```
+
+```{r}
+curry_distance_summary <- steph_curry|>
+  group_by(distance_bin) |>
+  summarise(
+    attempts = n(),
+    SSQ = mean(xPts, na.rm = TRUE),
+    actual_PPA = mean(actual_pts, na.rm = TRUE),
+    SMP = actual_PPA - SSQ,
+    PAE = sum(actual_pts - xPts, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r}
+comparison_NBA_SC <- bind_rows(
+  mutate(league_shot_selection, player = "NBA"),
+  mutate(curry_distance_summary, player = "Curry"),
+)
+
+comparison_NBA_SC <- comparison_NBA_SC |>
+  group_by(player) |>
+  mutate(
+    shot_share = round(attempts / sum(attempts) * 100, 2)
+  ) |>
+  ungroup()
+
+```
+
+```{r}
+ggplot(comparison_NBA_SC, aes(x = distance_bin, y = SMP, fill = player)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Steph Curry vs NBA Shot-Making Performance",
+    x = "Shot Distance",
+    y = "SMP"
+  ) +
+  theme_minimal()
+
+ggplot(comparison_NBA_SC, aes(x = distance_bin, y = shot_share, fill = player)) +
+  geom_col(position = 'dodge')
+
+ggplot(curry_distance_summary, aes(x = distance_bin, y = PAE)) +
+  geom_col()
+```
+## Lebron James
+
+```{r}
+lebron_james <- shots_2026 |> 
+ mutate(
+    distance_bin = cut(
+      shot_distance,
+      breaks = c(-1, 4, 9, 14, 22, 29, Inf),
+      labels = c(
+        "At Rim",
+        "Short Range",
+        "Midrange",
+        "Long Midrange",
+        "Three-Point Range",
+        "Deep"
+      )
+    )
+  ) |> 
+  filter(person_id == 2544)
+```
+
+```{r}
+lebron_distance_summary <- lebron_james|>
+  group_by(distance_bin) |>
+  summarise(
+    attempts = n(),
+    SSQ = mean(xPts, na.rm = TRUE),
+    actual_PPA = mean(actual_pts, na.rm = TRUE),
+    SMP = actual_PPA - SSQ,
+    PAE = sum(actual_pts - xPts, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r}
+comparison_NBA_LBJ <- bind_rows(
+  mutate(league_shot_selection, player = "NBA"),
+  mutate(lebron_distance_summary, player = "Lebron"),
+)
+
+comparison_NBA_LBJ <- comparison_NBA_LBJ |>
+  group_by(player) |>
+  mutate(
+    shot_share = round(attempts / sum(attempts) * 100, 2)
+  ) |>
+  ungroup()
+
+```
+
+```{r}
+ggplot(comparison_NBA_LBJ, aes(x = distance_bin, y = SMP, fill = player)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Lebron vs NBA Shot-Making Performance",
+    x = "Shot Distance",
+    y = "SMP"
+  ) +
+  theme_minimal()
+
+ggplot(comparison_NBA_LBJ, aes(x = distance_bin, y = shot_share, fill = player)) +
+  geom_col(position = 'dodge')
+
+ggplot(lebron_distance_summary, aes(x = distance_bin, y = PAE)) +
+  geom_col()
+```
+### Demar DeRozan
+
+```{r}
+demar <- shots_2026 |> 
+ mutate(
+    distance_bin = cut(
+      shot_distance,
+      breaks = c(-1, 4, 9, 14, 22, 29, Inf),
+      labels = c(
+        "At Rim",
+        "Short Range",
+        "Midrange",
+        "Long Midrange",
+        "Three-Point Range",
+        "Deep"
+      )
+    )
+  ) |> 
+  filter(person_id == 201942)
+```
+
+```{r}
+demar_distance_summary <- demar|>
+  group_by(distance_bin) |>
+  summarise(
+    attempts = n(),
+    SSQ = mean(xPts, na.rm = TRUE),
+    actual_PPA = mean(actual_pts, na.rm = TRUE),
+    SMP = actual_PPA - SSQ,
+    PAE = sum(actual_pts - xPts, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r}
+comparison_NBA_demar <- bind_rows(
+  mutate(league_shot_selection, player = "NBA"),
+  mutate(demar_distance_summary, player = "Demar"),
+)
+
+comparison_NBA_demar <- comparison_NBA_demar |>
+  group_by(player) |>
+  mutate(
+    shot_share = round(attempts / sum(attempts) * 100, 2)
+  ) |>
+  ungroup()
+
+```
+
+```{r}
+ggplot(comparison_NBA_demar, aes(x = distance_bin, y = SMP, fill = player)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Demar vs NBA Shot-Making Performance",
+    x = "Shot Distance",
+    y = "SMP"
+  ) +
+  theme_minimal()
+
+ggplot(comparison_NBA_demar, aes(x = distance_bin, y = shot_share, fill = player)) +
+  geom_col(position = 'dodge')
+
+ggplot(demar_distance_summary, aes(x = distance_bin, y = PAE)) +
+  geom_col()
+```
+## Rudy Gobert
+
+```{r}
+gobert <- shots_2026 |> 
+ mutate(
+    distance_bin = cut(
+      shot_distance,
+      breaks = c(-1, 4, 9, 14, 22, 29, Inf),
+      labels = c(
+        "At Rim",
+        "Short Range",
+        "Midrange",
+        "Long Midrange",
+        "Three-Point Range",
+        "Deep"
+      )
+    )
+  ) |> 
+  filter(person_id == 203497)
+```
+
+```{r}
+gobert_distance_summary <- gobert|>
+  group_by(distance_bin) |>
+  summarise(
+    attempts = n(),
+    SSQ = mean(xPts, na.rm = TRUE),
+    actual_PPA = mean(actual_pts, na.rm = TRUE),
+    SMP = actual_PPA - SSQ,
+    PAE = sum(actual_pts - xPts, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r}
+comparison_NBA_gobert <- bind_rows(
+  mutate(league_shot_selection, player = "NBA"),
+  mutate(gobert_distance_summary, player = "Gobert"),
+)
+
+comparison_NBA_gobert <- comparison_NBA_gobert |>
+  group_by(player) |>
+  mutate(
+    shot_share = round(attempts / sum(attempts) * 100, 2)
+  ) |>
+  ungroup()
+
+```
+
+```{r}
+ggplot(comparison_NBA_gobert, aes(x = distance_bin, y = SMP, fill = player)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Gobert vs NBA Shot-Making Performance",
+    x = "Shot Distance",
+    y = "SMP"
+  ) +
+  theme_minimal()
+
+ggplot(comparison_NBA_gobert, aes(x = distance_bin, y = shot_share, fill = player)) +
+  geom_col(position = 'dodge')
+
+ggplot(gobert_distance_summary, aes(x = distance_bin, y = PAE)) +
+  geom_col()
+```
+### Jakob Potel
+```{r}
+JP <- shots_2026 |> 
+ mutate(
+    distance_bin = cut(
+      shot_distance,
+      breaks = c(-1, 4, 9, 14, 22, 29, Inf),
+      labels = c(
+        "At Rim",
+        "Short Range",
+        "Midrange",
+        "Long Midrange",
+        "Three-Point Range",
+        "Deep"
+      )
+    )
+  ) |> 
+  filter(person_id == 1627751)
+```
+
+```{r}
+JP_distance_summary <- JP|>
+  group_by(distance_bin) |>
+  summarise(
+    attempts = n(),
+    SSQ = mean(xPts, na.rm = TRUE),
+    actual_PPA = mean(actual_pts, na.rm = TRUE),
+    SMP = actual_PPA - SSQ,
+    PAE = sum(actual_pts - xPts, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r}
+comparison_NBA_JP <- bind_rows(
+  mutate(league_shot_selection, player = "NBA"),
+  mutate(JP_distance_summary, player = "Poeltl"),
+)
+
+comparison_NBA_JP <- comparison_NBA_JP |>
+  group_by(player) |>
+  mutate(
+    shot_share = round(attempts / sum(attempts) * 100, 2)
+  ) |>
+  ungroup()
+
+```
+
+```{r}
+ggplot(comparison_NBA_JP, aes(x = distance_bin, y = SMP, fill = player)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Poeltl vs NBA Shot-Making Performance",
+    x = "Shot Distance",
+    y = "SMP"
+  ) +
+  theme_minimal()
+
+ggplot(comparison_NBA_JP, aes(x = distance_bin, y = shot_share, fill = player)) +
+  geom_col(position = 'dodge')
+
+ggplot(JP_distance_summary, aes(x = distance_bin, y = PAE)) +
+  geom_col()
+```
+
+### Player Comparison
+
+```{r}
+player_comparison_2026 <- shots_2026 |>
+  filter(
+    person_id %in% c(
+      201142,    # Durant
+      201939,    # Curry
+      2544,      # LeBron
+      201942,    # DeRozan
+      203497,    # Gobert
+      1627751    # Poeltl
+    )
+  ) |>
+  group_by(person_id, player_name) |>
+  summarise(
+    attempts = n(),
+    SSQ = mean(xPts, na.rm = TRUE),
+    actual_PPA = mean(actual_pts, na.rm = TRUE),
+    SMP = actual_PPA - SSQ,
+    PAE = sum(actual_pts - xPts, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(desc(PAE))
+
+player_comparison_2026
+```
+
+
+## All 6 players
+```{r}
+player_distance_comparison <- shots_2026 |>
+  filter(person_id %in% c(
+    201142, 201942,   # Durant, DeRozan
+    203497, 1627751, # Gobert, Poeltl
+    201939, 2544     # Curry, LeBron
+  )) |>
+  mutate(
+    distance_bin = cut(
+      shot_distance,
+      breaks = c(-1, 4, 9, 14, 22, 29, Inf),
+      labels = c(
+        "At Rim",
+        "Short Range",
+        "Midrange",
+        "Long Midrange",
+        "Three-Point Range",
+        "Deep"
+      )
+    )
+  ) |>
+  group_by(person_id, player_name, distance_bin) |>
+  summarise(
+    attempts = n(),
+    SSQ = mean(xPts, na.rm = TRUE),
+    actual_PPA = mean(actual_pts, na.rm = TRUE),
+    SMP = actual_PPA - SSQ,
+    PAE = sum(actual_pts - xPts, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  group_by(person_id) |>
+  mutate(
+    shot_share = round(attempts / sum(attempts) * 100, 2)
+  ) |>
+  ungroup()
+
+player_distance_comparison
+
+```
+
+## Durant vs Derozan
+
+```{r}
+KD_vs_DD <- player_distance_comparison |> 
+  filter(person_id %in% c(
+    201142, 201942  # Durant, DeRozan
+  ))
+```
+
+## Gobert vs Poeltl
+
+```{r}
+RG_vs_JP <- player_distance_comparison |> 
+  filter(person_id %in% c(
+   203497, 1627751 # Gobert, Poeltl
+  ))
+```
+
+## Curry vs Lebron 
+
+```{r}
+LBJ_vs_SC <- player_distance_comparison |> 
+  filter(person_id %in% c(
+  201939, 2544     # Curry, LeBron
+  ))
+```
+
