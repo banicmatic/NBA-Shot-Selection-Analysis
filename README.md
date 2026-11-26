@@ -72,8 +72,6 @@ Consequently, the developed metrics should be interpreted as descriptive measure
 
 ## Project Files
 
-## Files in This Repository
-
 - `01_Exploratory_Analysis_NBA_Project.Rmd`  
   Exploratory analysis, model building, and early visuals.
 
