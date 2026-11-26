@@ -72,7 +72,19 @@ Consequently, the developed metrics should be interpreted as descriptive measure
 
 ## Project Files
 
-| File | Description |
-|---|---|
-| `Good_Shot_Bad_Shot_Report.pdf` | Full research report, including methodology, results, and discussion |
-| `code
+## Files in This Repository
+
+- `01_Exploratory_Analysis_NBA_Project.Rmd`  
+  Exploratory analysis, model building, and early visuals.
+
+- `02_Final_Analysis_NBA_Project.Rmd`  
+  Final cleaned analysis and report-writing file.
+
+- `Good_Shot_Bad_Shot_2026.png`  
+  Main player comparison visualization.
+
+- `Good_Shot_Bad_Shot_Report.pdf`  
+  Final project report.
+
+- `.gitignore`  
+  Git ignore file for project housekeeping.
