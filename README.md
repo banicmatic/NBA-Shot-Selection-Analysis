@@ -15,7 +15,7 @@ The central research question is:
 
 ## Shot Selection vs. Shot-Making Performance
 
-![NBA Shot Selection vs. Shot-Making Performance](figures/Good_Shot_Bad_Shot_2026.png)
+![NBA Shot Selection vs. Shot-Making Performance](Good_Shot_Bad_Shot_2026.png)
 
 The visualization compares Shot Selection Quality (SSQ) against Shot-Making Performance (SMP) among NBA players with at least 300 field goal attempts during the 2025–26 season.
 
